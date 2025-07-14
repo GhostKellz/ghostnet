@@ -1,24 +1,59 @@
-//! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
 
-pub fn bufferedPrint() !void {
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.fs.File.stdout().deprecatedWriter();
-    // Buffering can improve performance significantly in print-heavy programs.
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+pub const transport = @import("transport/transport.zig");
+pub const tcp = @import("transport/tcp.zig");
+pub const udp = @import("transport/udp.zig");
+pub const pool = @import("transport/pool.zig");
+pub const errors = @import("errors/errors.zig");
+pub const protocols = @import("protocols/protocol.zig");
+pub const quic = @import("protocols/quic.zig");
+pub const wireguard = @import("protocols/wireguard.zig");
+pub const websocket = @import("protocols/websocket.zig");
+pub const http = @import("protocols/http.zig");
+pub const handshake = @import("crypto/handshake.zig");
+pub const gossip = @import("p2p/gossip.zig");
+pub const kademlia = @import("p2p/kademlia.zig");
+pub const mdns = @import("p2p/mdns.zig");
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+pub const zsync = @import("zsync");
+pub const zcrypto = @import("zcrypto");
+pub const zquic = @import("zquic");
 
-    try bw.flush(); // Don't forget to flush!
-}
+pub const Transport = transport.Transport;
+pub const Connection = transport.Connection;
+pub const Stream = transport.Stream;
+pub const Listener = transport.Listener;
+pub const Address = transport.Address;
+pub const TransportOptions = transport.TransportOptions;
+pub const TransportError = transport.TransportError;
 
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+pub const TcpTransport = tcp.TcpTransport;
+pub const TcpListener = tcp.TcpListener;
+pub const TcpConnection = tcp.TcpConnection;
 
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+pub const UdpSocket = udp.UdpSocket;
+pub const UdpPacket = udp.UdpPacket;
+
+pub const ConnectionPool = pool.ConnectionPool;
+pub const PoolConfig = pool.PoolConfig;
+
+pub const ProtocolRegistry = protocols.ProtocolRegistry;
+pub const ProtocolHandler = protocols.ProtocolHandler;
+pub const Message = protocols.Message;
+
+pub const QuicConnection = quic.QuicConnection;
+pub const QuicServer = quic.QuicServer;
+pub const QuicClient = quic.QuicClient;
+pub const QuicStream = quic.QuicStream;
+
+pub const WireGuardTunnel = wireguard.WireGuardTunnel;
+pub const WireGuardConfig = wireguard.WireGuardConfig;
+pub const Peer = wireguard.Peer;
+
+pub const GhostnetError = errors.GhostnetError;
+pub const ErrorContext = errors.ErrorContext;
+pub const Result = errors.Result;
+
+test {
+    std.testing.refAllDecls(@This());
 }

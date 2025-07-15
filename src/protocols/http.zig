@@ -5,6 +5,8 @@ const tcp = @import("../transport/tcp.zig");
 const websocket = @import("websocket.zig");
 const handshake = @import("../crypto/handshake.zig");
 const errors = @import("../errors/errors.zig");
+const middleware = @import("middleware.zig");
+const pool = @import("../transport/pool.zig");
 
 pub const HttpMethod = enum {
     GET,
@@ -162,6 +164,7 @@ pub const HttpResponse = struct {
     status_text: []const u8,
     headers: std.StringHashMap([]const u8),
     body: ?[]const u8,
+    allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator, status_code: u16, status_text: []const u8) !HttpResponse {
         return HttpResponse{
@@ -170,6 +173,7 @@ pub const HttpResponse = struct {
             .status_text = try allocator.dupe(u8, status_text),
             .headers = std.StringHashMap([]const u8).init(allocator),
             .body = null,
+            .allocator = allocator,
         };
     }
     
@@ -206,6 +210,27 @@ pub const HttpResponse = struct {
         return self.headers.get(name);
     }
     
+    pub fn getJson(self: *HttpResponse, comptime T: type) !T {
+        const body = self.body orelse return error.NoBody;
+        return try std.json.parseFromSlice(T, self.allocator, body, .{});
+    }
+    
+    pub fn isSuccess(self: *HttpResponse) bool {
+        return self.status_code >= 200 and self.status_code < 300;
+    }
+    
+    pub fn isRedirect(self: *HttpResponse) bool {
+        return self.status_code >= 300 and self.status_code < 400;
+    }
+    
+    pub fn isClientError(self: *HttpResponse) bool {
+        return self.status_code >= 400 and self.status_code < 500;
+    }
+    
+    pub fn isServerError(self: *HttpResponse) bool {
+        return self.status_code >= 500 and self.status_code < 600;
+    }
+    
     pub fn parse(allocator: std.mem.Allocator, data: []const u8) !HttpResponse {
         var lines = std.mem.split(u8, data, "\r\n");
         
@@ -234,6 +259,7 @@ pub const HttpResponse = struct {
             .status_text = try allocator.dupe(u8, status_text),
             .headers = std.StringHashMap([]const u8).init(allocator),
             .body = null,
+            .allocator = allocator,
         };
         
         // Parse headers
@@ -273,21 +299,41 @@ pub const HttpClient = struct {
     user_agent: []const u8,
     default_headers: std.StringHashMap([]const u8),
     timeout: u64, // milliseconds
+    bearer_token: ?[]const u8,
+    basic_auth: ?struct { username: []const u8, password: []const u8 },
+    api_key: ?struct { header: []const u8, value: []const u8 },
+    middleware_chain: middleware.MiddlewareChain,
+    connection_pool: ?*pool.ConnectionPool,
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) !*HttpClient {
         var client = try allocator.create(HttpClient);
         client.* = .{
             .allocator = allocator,
             .runtime = runtime,
-            .user_agent = try allocator.dupe(u8, "ghostnet/0.1.0"),
+            .user_agent = try allocator.dupe(u8, "ghostnet/0.2.0"),
             .default_headers = std.StringHashMap([]const u8).init(allocator),
             .timeout = 30000, // 30 seconds
+            .bearer_token = null,
+            .basic_auth = null,
+            .api_key = null,
+            .middleware_chain = middleware.MiddlewareChain.init(allocator),
+            .connection_pool = null,
         };
         
         // Set default headers
         try client.setDefaultHeader("User-Agent", client.user_agent);
         try client.setDefaultHeader("Accept", "*/*");
         try client.setDefaultHeader("Connection", "close");
+        
+        return client;
+    }
+    
+    pub fn initWithPool(allocator: std.mem.Allocator, runtime: *zsync.Runtime, pool_config: pool.PoolConfig) !*HttpClient {
+        var client = try HttpClient.init(allocator, runtime);
+        client.connection_pool = try pool.ConnectionPool.init(allocator, runtime, pool_config);
+        
+        // Update default headers for pooled connections
+        try client.setDefaultHeader("Connection", "keep-alive");
         
         return client;
     }
@@ -302,6 +348,23 @@ pub const HttpClient = struct {
         }
         self.default_headers.deinit();
         
+        if (self.bearer_token) |token| {
+            self.allocator.free(token);
+        }
+        if (self.basic_auth) |auth| {
+            self.allocator.free(auth.username);
+            self.allocator.free(auth.password);
+        }
+        if (self.api_key) |key| {
+            self.allocator.free(key.header);
+            self.allocator.free(key.value);
+        }
+        
+        self.middleware_chain.deinit();
+        if (self.connection_pool) |pool_ptr| {
+            pool_ptr.deinit();
+        }
+        
         self.allocator.destroy(self);
     }
     
@@ -311,11 +374,83 @@ pub const HttpClient = struct {
         try self.default_headers.put(name_copy, value_copy);
     }
     
+    pub fn setBearerToken(self: *HttpClient, token: []const u8) !void {
+        if (self.bearer_token) |old_token| {
+            self.allocator.free(old_token);
+        }
+        self.bearer_token = try self.allocator.dupe(u8, token);
+    }
+    
+    pub fn setBasicAuth(self: *HttpClient, username: []const u8, password: []const u8) !void {
+        if (self.basic_auth) |auth| {
+            self.allocator.free(auth.username);
+            self.allocator.free(auth.password);
+        }
+        self.basic_auth = .{
+            .username = try self.allocator.dupe(u8, username),
+            .password = try self.allocator.dupe(u8, password),
+        };
+    }
+    
+    pub fn setApiKey(self: *HttpClient, header: []const u8, value: []const u8) !void {
+        if (self.api_key) |key| {
+            self.allocator.free(key.header);
+            self.allocator.free(key.value);
+        }
+        self.api_key = .{
+            .header = try self.allocator.dupe(u8, header),
+            .value = try self.allocator.dupe(u8, value),
+        };
+    }
+    
+    pub fn setDefaultTimeout(self: *HttpClient, timeout_ms: u64) void {
+        self.timeout = timeout_ms;
+    }
+    
+    pub fn addMiddleware(self: *HttpClient, mw: middleware.Middleware) !void {
+        try self.middleware_chain.add(mw);
+    }
+    
+    pub fn enableDebugLogging(self: *HttpClient) !void {
+        try self.addMiddleware(middleware.LoggingMiddleware.create());
+    }
+    
+    pub fn setRetryConfig(self: *HttpClient, config: middleware.RetryConfig) !void {
+        try self.addMiddleware(middleware.RetryMiddleware.create(config));
+    }
+    
     pub fn get(self: *HttpClient, url: []const u8) !HttpResponse {
         var request = try HttpRequest.init(self.allocator, .GET, url);
         defer request.deinit(self.allocator);
         
         return try self.sendRequest(&request, url);
+    }
+    
+    pub fn getWithHeaders(self: *HttpClient, url: []const u8, headers: std.StringHashMap([]const u8)) !HttpResponse {
+        var request = try HttpRequest.init(self.allocator, .GET, url);
+        defer request.deinit(self.allocator);
+        
+        var header_iter = headers.iterator();
+        while (header_iter.next()) |entry| {
+            try request.setHeader(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+        
+        return try self.sendRequest(&request, url);
+    }
+    
+    pub fn getWithTimeout(self: *HttpClient, url: []const u8, timeout_ms: u64) !HttpResponse {
+        const old_timeout = self.timeout;
+        self.timeout = timeout_ms;
+        defer self.timeout = old_timeout;
+        
+        return try self.get(url);
+    }
+    
+    pub fn getJson(self: *HttpClient, url: []const u8, comptime T: type) !T {
+        const response = try self.get(url);
+        defer response.deinit(self.allocator);
+        
+        return try response.getJson(T);
     }
     
     pub fn post(self: *HttpClient, url: []const u8, body: []const u8, content_type: []const u8) !HttpResponse {
@@ -326,6 +461,27 @@ pub const HttpClient = struct {
         try request.setHeader(self.allocator, "Content-Type", content_type);
         
         return try self.sendRequest(&request, url);
+    }
+    
+    pub fn postWithHeaders(self: *HttpClient, url: []const u8, body: []const u8, headers: std.StringHashMap([]const u8)) !HttpResponse {
+        var request = try HttpRequest.init(self.allocator, .POST, url);
+        defer request.deinit(self.allocator);
+        
+        try request.setBody(self.allocator, body);
+        
+        var header_iter = headers.iterator();
+        while (header_iter.next()) |entry| {
+            try request.setHeader(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+        
+        return try self.sendRequest(&request, url);
+    }
+    
+    pub fn postJsonData(self: *HttpClient, url: []const u8, data: anytype) !HttpResponse {
+        const json_string = try std.json.stringifyAlloc(self.allocator, data, .{});
+        defer self.allocator.free(json_string);
+        
+        return try self.postJson(url, json_string);
     }
     
     pub fn postJson(self: *HttpClient, url: []const u8, json_body: []const u8) !HttpResponse {
@@ -339,6 +495,31 @@ pub const HttpClient = struct {
         const host = uri.host orelse return error.MissingHost;
         const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
         const is_https = std.mem.eql(u8, uri.scheme, "https");
+        
+        // Add authentication headers
+        if (self.bearer_token) |token| {
+            const auth_header = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{token});
+            defer self.allocator.free(auth_header);
+            try request.setHeader(self.allocator, "Authorization", auth_header);
+        } else if (self.basic_auth) |auth| {
+            const credentials = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ auth.username, auth.password });
+            defer self.allocator.free(credentials);
+            
+            const encoder = std.base64.standard.Encoder;
+            const encoded_len = encoder.calcSize(credentials.len);
+            const encoded = try self.allocator.alloc(u8, encoded_len);
+            defer self.allocator.free(encoded);
+            
+            _ = encoder.encode(encoded, credentials);
+            const auth_header = try std.fmt.allocPrint(self.allocator, "Basic {s}", .{encoded});
+            defer self.allocator.free(auth_header);
+            
+            try request.setHeader(self.allocator, "Authorization", auth_header);
+        }
+        
+        if (self.api_key) |key| {
+            try request.setHeader(self.allocator, key.header, key.value);
+        }
         
         // Add default headers
         var header_iter = self.default_headers.iterator();
@@ -466,6 +647,75 @@ pub const HttpClient = struct {
 };
 
 // AI Service specific clients
+pub const OpenAIClient = struct {
+    http_client: *HttpClient,
+    api_key: []const u8,
+    base_url: []const u8,
+    
+    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, api_key: []const u8) !*OpenAIClient {
+        var client = try allocator.create(OpenAIClient);
+        client.* = .{
+            .http_client = try HttpClient.init(allocator, runtime),
+            .api_key = try allocator.dupe(u8, api_key),
+            .base_url = try allocator.dupe(u8, "https://api.openai.com/v1"),
+        };
+        
+        // Set OpenAI-specific headers
+        try client.http_client.setBearerToken(api_key);
+        try client.http_client.setDefaultHeader("OpenAI-Beta", "assistants=v2");
+        
+        return client;
+    }
+    
+    pub fn deinit(self: *OpenAIClient) void {
+        self.http_client.deinit();
+        self.http_client.allocator.free(self.api_key);
+        self.http_client.allocator.free(self.base_url);
+        self.http_client.allocator.destroy(self);
+    }
+    
+    pub fn chatCompletion(self: *OpenAIClient, messages: []const ChatMessage, model: []const u8) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/chat/completions", .{self.base_url});
+        defer self.http_client.allocator.free(url);
+        
+        const request_body = try std.fmt.allocPrint(self.http_client.allocator,
+            \\{{
+            \\  "model": "{s}",
+            \\  "max_tokens": 4096,
+            \\  "messages": [
+            \\    {{
+            \\      "role": "user",
+            \\      "content": "Hello"
+            \\    }}
+            \\  ]
+            \\}}
+        , .{model});
+        defer self.http_client.allocator.free(request_body);
+        
+        return try self.http_client.postJson(url, request_body);
+    }
+    
+    pub fn createEmbedding(self: *OpenAIClient, input: []const u8, model: []const u8) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/embeddings", .{self.base_url});
+        defer self.http_client.allocator.free(url);
+        
+        const request_body = try std.fmt.allocPrint(self.http_client.allocator,
+            \\{{
+            \\  "model": "{s}",
+            \\  "input": "{s}"
+            \\}}
+        , .{ model, input });
+        defer self.http_client.allocator.free(request_body);
+        
+        return try self.http_client.postJson(url, request_body);
+    }
+};
+
+pub const ChatMessage = struct {
+    role: []const u8,
+    content: []const u8,
+};
+
 pub const ClaudeClient = struct {
     http_client: *HttpClient,
     api_key: []const u8,
@@ -558,5 +808,62 @@ pub const CopilotClient = struct {
         defer self.http_client.allocator.free(request_body);
         
         return try self.http_client.postJson(url, request_body);
+    }
+    
+    pub fn getCopilotToken(self: *CopilotClient) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/token", .{self.base_url});
+        defer self.http_client.allocator.free(url);
+        
+        return try self.http_client.get(url);
+    }
+};
+
+pub const GitHubClient = struct {
+    http_client: *HttpClient,
+    token: []const u8,
+    base_url: []const u8,
+    
+    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, token: []const u8) !*GitHubClient {
+        var client = try allocator.create(GitHubClient);
+        client.* = .{
+            .http_client = try HttpClient.init(allocator, runtime),
+            .token = try allocator.dupe(u8, token),
+            .base_url = try allocator.dupe(u8, "https://api.github.com"),
+        };
+        
+        // Set GitHub-specific headers
+        try client.http_client.setBearerToken(token);
+        try client.http_client.setDefaultHeader("Accept", "application/vnd.github.v3+json");
+        try client.http_client.setDefaultHeader("X-GitHub-Api-Version", "2022-11-28");
+        
+        return client;
+    }
+    
+    pub fn deinit(self: *GitHubClient) void {
+        self.http_client.deinit();
+        self.http_client.allocator.free(self.token);
+        self.http_client.allocator.free(self.base_url);
+        self.http_client.allocator.destroy(self);
+    }
+    
+    pub fn getCopilotToken(self: *GitHubClient) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/copilot_internal/v2/token", .{self.base_url});
+        defer self.http_client.allocator.free(url);
+        
+        return try self.http_client.get(url);
+    }
+    
+    pub fn getUser(self: *GitHubClient) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/user", .{self.base_url});
+        defer self.http_client.allocator.free(url);
+        
+        return try self.http_client.get(url);
+    }
+    
+    pub fn getRepository(self: *GitHubClient, owner: []const u8, repo: []const u8) !HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/repos/{s}/{s}", .{ self.base_url, owner, repo });
+        defer self.http_client.allocator.free(url);
+        
+        return try self.http_client.get(url);
     }
 };

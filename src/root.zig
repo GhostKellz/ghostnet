@@ -10,6 +10,9 @@ pub const quic = @import("protocols/quic.zig");
 pub const wireguard = @import("protocols/wireguard.zig");
 pub const websocket = @import("protocols/websocket.zig");
 pub const http = @import("protocols/http.zig");
+pub const http2 = @import("protocols/http2.zig");
+pub const middleware = @import("protocols/middleware.zig");
+pub const http_errors = @import("errors/http_errors.zig");
 pub const handshake = @import("crypto/handshake.zig");
 pub const gossip = @import("p2p/gossip.zig");
 pub const kademlia = @import("p2p/kademlia.zig");
@@ -53,6 +56,25 @@ pub const Peer = wireguard.Peer;
 pub const GhostnetError = errors.GhostnetError;
 pub const ErrorContext = errors.ErrorContext;
 pub const Result = errors.Result;
+
+pub const HttpClient = http.HttpClient;
+pub const HttpResponse = http.HttpResponse;
+pub const HttpRequest = http.HttpRequest;
+pub const HttpMethod = http.HttpMethod;
+pub const HttpStatus = http.HttpStatus;
+pub const ChatMessage = http.ChatMessage;
+pub const OpenAIClient = http.OpenAIClient;
+pub const ClaudeClient = http.ClaudeClient;
+pub const CopilotClient = http.CopilotClient;
+pub const GitHubClient = http.GitHubClient;
+
+pub const Http2Client = http2.Http2Client;
+pub const Http2Connection = http2.Http2Connection;
+pub const MiddlewareChain = middleware.MiddlewareChain;
+pub const Middleware = middleware.Middleware;
+pub const RetryConfig = middleware.RetryConfig;
+pub const HttpError = http_errors.HttpError;
+pub const ErrorContext = http_errors.ErrorContext;
 
 test {
     std.testing.refAllDecls(@This());

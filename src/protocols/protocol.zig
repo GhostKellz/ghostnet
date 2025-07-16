@@ -232,7 +232,7 @@ pub const ProtocolRegistry = struct {
             try self.port_map.put(port, name);
         }
         
-        _ = self.stats.total_protocols.fetchAdd(1, .SeqCst);
+        _ = self.stats.total_protocols.fetchAdd(1, .seq_cst);
     }
     
     pub fn unregister(self: *ProtocolRegistry, name: []const u8) !void {
@@ -248,7 +248,7 @@ pub const ProtocolRegistry = struct {
             }
             
             _ = kv.value.stop();
-            _ = self.stats.total_protocols.fetchSub(1, .SeqCst);
+            _ = self.stats.total_protocols.fetchSub(1, .seq_cst);
         }
     }
     
@@ -301,7 +301,7 @@ pub const ProtocolRegistry = struct {
                                 if (result) |_| {
                                     // Continue
                                 } else |err| {
-                                    _ = ctx.registry.stats.errors_encountered.fetchAdd(1, .SeqCst);
+                                    _ = ctx.registry.stats.errors_encountered.fetchAdd(1, .seq_cst);
                                     return .{ .ready = err };
                                 }
                             },
@@ -312,15 +312,15 @@ pub const ProtocolRegistry = struct {
                     // Handle the message
                     switch (handler.handleMessage(processed_msg)) {
                         .ready => |result| {
-                            _ = ctx.registry.stats.messages_processed.fetchAdd(1, .SeqCst);
+                            _ = ctx.registry.stats.messages_processed.fetchAdd(1, .seq_cst);
                             
                             const end_time = std.time.nanoTimestamp();
                             const duration: u64 = @intCast(end_time - start_time);
                             
                             // Update running average
-                            const current_avg = ctx.registry.stats.average_message_time.load(.SeqCst);
+                            const current_avg = ctx.registry.stats.average_message_time.load(.seq_cst);
                             const new_avg = (current_avg + duration) / 2;
-                            ctx.registry.stats.average_message_time.store(new_avg, .SeqCst);
+                            ctx.registry.stats.average_message_time.store(new_avg, .seq_cst);
                             
                             return .{ .ready = result };
                         },
@@ -380,7 +380,7 @@ pub const ProtocolRegistry = struct {
                     switch (handler.start()) {
                         .ready => |result| {
                             if (result) |_| {
-                                _ = ctx.registry.stats.active_protocols.fetchAdd(1, .SeqCst);
+                                _ = ctx.registry.stats.active_protocols.fetchAdd(1, .seq_cst);
                             }
                             return .{ .ready = result };
                         },
@@ -405,7 +405,7 @@ pub const ProtocolRegistry = struct {
                 if (ctx.registry.protocols.get(ctx.proto_name)) |handler| {
                     switch (handler.stop()) {
                         .ready => |_| {
-                            _ = ctx.registry.stats.active_protocols.fetchSub(1, .SeqCst);
+                            _ = ctx.registry.stats.active_protocols.fetchSub(1, .seq_cst);
                             return .{ .ready = {} };
                         },
                         .pending => return .pending,
@@ -419,11 +419,11 @@ pub const ProtocolRegistry = struct {
     
     pub fn getStats(self: *ProtocolRegistry) RegistryStats {
         return .{
-            .total_protocols = std.atomic.Value(u32).init(self.stats.total_protocols.load(.SeqCst)),
-            .active_protocols = std.atomic.Value(u32).init(self.stats.active_protocols.load(.SeqCst)),
-            .messages_processed = std.atomic.Value(u64).init(self.stats.messages_processed.load(.SeqCst)),
-            .errors_encountered = std.atomic.Value(u64).init(self.stats.errors_encountered.load(.SeqCst)),
-            .average_message_time = std.atomic.Value(u64).init(self.stats.average_message_time.load(.SeqCst)),
+            .total_protocols = std.atomic.Value(u32).init(self.stats.total_protocols.load(.seq_cst)),
+            .active_protocols = std.atomic.Value(u32).init(self.stats.active_protocols.load(.seq_cst)),
+            .messages_processed = std.atomic.Value(u64).init(self.stats.messages_processed.load(.seq_cst)),
+            .errors_encountered = std.atomic.Value(u64).init(self.stats.errors_encountered.load(.seq_cst)),
+            .average_message_time = std.atomic.Value(u64).init(self.stats.average_message_time.load(.seq_cst)),
         };
     }
     

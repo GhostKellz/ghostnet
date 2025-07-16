@@ -425,7 +425,7 @@ pub const GossipNode = struct {
         try self.socket.bind(bind_address, transport.TransportOptions{ .allocator = self.allocator });
         self.local_address = try self.socket.localAddress();
         
-        self.running.store(true, .SeqCst);
+        self.running.store(true, .seq_cst);
         
         // Start background tasks
         _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
@@ -435,7 +435,7 @@ pub const GossipNode = struct {
     }
     
     pub fn stop(self: *GossipNode) void {
-        self.running.store(false, .SeqCst);
+        self.running.store(false, .seq_cst);
     }
     
     pub fn addPeer(self: *GossipNode, peer_id: [16]u8, address: transport.Address) !void {
@@ -450,7 +450,7 @@ pub const GossipNode = struct {
         try self.peers.put(peer_id, peer);
         try self.peer_addresses.put(address, peer_id);
         
-        _ = self.stats.peers_connected.fetchAdd(1, .SeqCst);
+        _ = self.stats.peers_connected.fetchAdd(1, .seq_cst);
         
         // Send announce message
         try self.sendAnnounce(peer);
@@ -463,7 +463,7 @@ pub const GossipNode = struct {
         if (self.peers.fetchRemove(peer_id)) |kv| {
             _ = self.peer_addresses.remove(kv.value.address);
             kv.value.deinit(self.allocator);
-            _ = self.stats.peers_connected.fetchSub(1, .SeqCst);
+            _ = self.stats.peers_connected.fetchSub(1, .seq_cst);
         }
     }
     
@@ -484,7 +484,7 @@ pub const GossipNode = struct {
             try self.topics.put(topic, gossip_topic);
         }
         
-        _ = self.stats.topics_subscribed.fetchAdd(1, .SeqCst);
+        _ = self.stats.topics_subscribed.fetchAdd(1, .seq_cst);
         
         // Send subscribe message to peers
         try self.broadcastSubscribe(topic);
@@ -495,7 +495,7 @@ pub const GossipNode = struct {
         defer self.mutex.unlock();
         
         if (self.subscriptions.remove(topic)) {
-            _ = self.stats.topics_subscribed.fetchSub(1, .SeqCst);
+            _ = self.stats.topics_subscribed.fetchSub(1, .seq_cst);
             
             // Send unsubscribe message to peers
             self.broadcastUnsubscribe(topic) catch {};
@@ -506,7 +506,7 @@ pub const GossipNode = struct {
         var message = try GossipMessage.init(self.allocator, .publish, self.config.node_id, topic, payload);
         defer message.deinit(self.allocator);
         
-        message.sequence_number = self.sequence_counter.fetchAdd(1, .SeqCst);
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
         
         try self.forwardMessage(&message);
     }
@@ -515,7 +515,7 @@ pub const GossipNode = struct {
         var message = try GossipMessage.init(self.allocator, .announce, self.config.node_id, "", "");
         defer message.deinit(self.allocator);
         
-        message.sequence_number = self.sequence_counter.fetchAdd(1, .SeqCst);
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
         
         try self.sendMessageToPeer(&message, peer);
     }
@@ -524,7 +524,7 @@ pub const GossipNode = struct {
         var message = try GossipMessage.init(self.allocator, .subscribe, self.config.node_id, topic, "");
         defer message.deinit(self.allocator);
         
-        message.sequence_number = self.sequence_counter.fetchAdd(1, .SeqCst);
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
         
         try self.broadcastMessage(&message);
     }
@@ -533,7 +533,7 @@ pub const GossipNode = struct {
         var message = try GossipMessage.init(self.allocator, .unsubscribe, self.config.node_id, topic, "");
         defer message.deinit(self.allocator);
         
-        message.sequence_number = self.sequence_counter.fetchAdd(1, .SeqCst);
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
         
         try self.broadcastMessage(&message);
     }
@@ -545,7 +545,7 @@ pub const GossipNode = struct {
         @memcpy(message_key[16..24], std.mem.asBytes(&message.sequence_number));
         
         if (self.seen_messages.contains(message_key)) {
-            _ = self.stats.messages_dropped.fetchAdd(1, .SeqCst);
+            _ = self.stats.messages_dropped.fetchAdd(1, .seq_cst);
             return;
         }
         
@@ -560,13 +560,13 @@ pub const GossipNode = struct {
         // Forward to interested peers
         try self.gossipMessage(message);
         
-        _ = self.stats.messages_forwarded.fetchAdd(1, .SeqCst);
+        _ = self.stats.messages_forwarded.fetchAdd(1, .seq_cst);
     }
     
     fn gossipMessage(self: *GossipNode, message: *GossipMessage) !void {
         // Reduce TTL
         if (message.ttl == 0) {
-            _ = self.stats.messages_dropped.fetchAdd(1, .SeqCst);
+            _ = self.stats.messages_dropped.fetchAdd(1, .seq_cst);
             return;
         }
         message.ttl -= 1;
@@ -609,14 +609,14 @@ pub const GossipNode = struct {
         
         _ = try self.socket.sendTo(data, peer.address);
         
-        _ = self.stats.messages_sent.fetchAdd(1, .SeqCst);
-        _ = self.stats.bytes_sent.fetchAdd(data.len, .SeqCst);
+        _ = self.stats.messages_sent.fetchAdd(1, .seq_cst);
+        _ = self.stats.bytes_sent.fetchAdd(data.len, .seq_cst);
     }
     
     fn receiveLoop(self: *GossipNode) void {
         var buffer: [65536]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             const packet = self.socket.recvFromAsync(&buffer) catch continue;
             
             switch (packet) {
@@ -639,13 +639,13 @@ pub const GossipNode = struct {
     
     fn handleMessage(self: *GossipNode, data: []const u8, sender_addr: transport.Address) !void {
         var message = GossipMessage.deserialize(self.allocator, data) catch {
-            _ = self.stats.messages_dropped.fetchAdd(1, .SeqCst);
+            _ = self.stats.messages_dropped.fetchAdd(1, .seq_cst);
             return;
         };
         defer message.deinit(self.allocator);
         
-        _ = self.stats.messages_received.fetchAdd(1, .SeqCst);
-        _ = self.stats.bytes_received.fetchAdd(data.len, .SeqCst);
+        _ = self.stats.messages_received.fetchAdd(1, .seq_cst);
+        _ = self.stats.bytes_received.fetchAdd(data.len, .seq_cst);
         
         // Update peer last seen
         if (self.peer_addresses.get(sender_addr)) |peer_id| {
@@ -743,7 +743,7 @@ pub const GossipNode = struct {
     }
     
     fn heartbeatLoop(self: *GossipNode) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(self.config.heartbeat_interval * 1000000); // Convert to nanoseconds
             
             self.mutex.lock();
@@ -762,13 +762,13 @@ pub const GossipNode = struct {
         var message = try GossipMessage.init(self.allocator, .heartbeat, self.config.node_id, "", "");
         defer message.deinit(self.allocator);
         
-        message.sequence_number = self.sequence_counter.fetchAdd(1, .SeqCst);
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
         
         try self.sendMessageToPeer(&message, peer);
     }
     
     fn antiEntropyLoop(self: *GossipNode) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(self.config.anti_entropy_interval * 1000000); // Convert to nanoseconds
             
             // Perform anti-entropy with random peers
@@ -782,7 +782,7 @@ pub const GossipNode = struct {
     }
     
     fn maintenanceLoop(self: *GossipNode) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(10000000000); // 10 seconds
             
             self.mutex.lock();

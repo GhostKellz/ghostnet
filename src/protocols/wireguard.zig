@@ -146,11 +146,11 @@ pub const Peer = struct {
     }
     
     pub fn updateActivity(self: *Peer) void {
-        self.last_activity.store(std.time.timestamp(), .SeqCst);
+        self.last_activity.store(std.time.timestamp(), .seq_cst);
     }
     
     pub fn isExpired(self: *Peer, timeout: i64) bool {
-        const last = self.last_activity.load(.SeqCst);
+        const last = self.last_activity.load(.seq_cst);
         return (std.time.timestamp() - last) > timeout;
     }
 };
@@ -425,7 +425,7 @@ pub const WireGuardTunnel = struct {
     }
     
     pub fn start(self: *WireGuardTunnel) !void {
-        if (self.running.load(.SeqCst)) {
+        if (self.running.load(.seq_cst)) {
             return;
         }
         
@@ -439,7 +439,7 @@ pub const WireGuardTunnel = struct {
         const tun_addr = std.net.Address{ .in = std.net.Ip4Address.parse("10.0.0.1") catch unreachable };
         self.tun_interface = try TunInterface.create(self.allocator, self.config.interface_name, tun_addr, self.config.mtu);
         
-        self.running.store(true, .SeqCst);
+        self.running.store(true, .seq_cst);
         
         // Start async tasks
         _ = try self.runtime.spawn(udpReceiveLoop, .{self}, .normal);
@@ -449,7 +449,7 @@ pub const WireGuardTunnel = struct {
     }
     
     pub fn stop(self: *WireGuardTunnel) void {
-        self.running.store(false, .SeqCst);
+        self.running.store(false, .seq_cst);
     }
     
     pub fn addPeer(self: *WireGuardTunnel, peer: *Peer) !void {
@@ -511,7 +511,7 @@ pub const WireGuardTunnel = struct {
         _ = try self.socket.sendTo(packet, peer.endpoint);
         
         peer.handshake_state = .initiation_sent;
-        _ = self.stats.handshakes_completed.fetchAdd(1, .SeqCst);
+        _ = self.stats.handshakes_completed.fetchAdd(1, .seq_cst);
     }
     
     pub fn handleHandshakeInitiation(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
@@ -566,7 +566,7 @@ pub const WireGuardTunnel = struct {
         
         _ = try self.socket.sendTo(response_packet, sender_addr);
         
-        _ = self.stats.handshakes_completed.fetchAdd(1, .SeqCst);
+        _ = self.stats.handshakes_completed.fetchAdd(1, .seq_cst);
     }
     
     pub fn handleTransportData(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
@@ -583,10 +583,10 @@ pub const WireGuardTunnel = struct {
         defer self.allocator.free(decrypted);
         
         // Update counters
-        _ = peer.receiving_counter.fetchAdd(1, .SeqCst);
-        _ = peer.rx_bytes.fetchAdd(decrypted.len, .SeqCst);
-        _ = self.stats.packets_received.fetchAdd(1, .SeqCst);
-        _ = self.stats.bytes_received.fetchAdd(decrypted.len, .SeqCst);
+        _ = peer.receiving_counter.fetchAdd(1, .seq_cst);
+        _ = peer.rx_bytes.fetchAdd(decrypted.len, .seq_cst);
+        _ = self.stats.packets_received.fetchAdd(1, .seq_cst);
+        _ = self.stats.bytes_received.fetchAdd(decrypted.len, .seq_cst);
         
         peer.updateActivity();
         
@@ -615,7 +615,7 @@ pub const WireGuardTunnel = struct {
             .type = @intFromEnum(MessageType.transport_data),
             .reserved = 0,
             .receiver = peer_id,
-            .counter = peer.sending_counter.fetchAdd(1, .SeqCst),
+            .counter = peer.sending_counter.fetchAdd(1, .seq_cst),
         };
         
         // Serialize and send
@@ -624,9 +624,9 @@ pub const WireGuardTunnel = struct {
         
         _ = try self.socket.sendTo(packet, peer.endpoint);
         
-        _ = peer.tx_bytes.fetchAdd(data.len, .SeqCst);
-        _ = self.stats.packets_sent.fetchAdd(1, .SeqCst);
-        _ = self.stats.bytes_sent.fetchAdd(data.len, .SeqCst);
+        _ = peer.tx_bytes.fetchAdd(data.len, .seq_cst);
+        _ = self.stats.packets_sent.fetchAdd(1, .seq_cst);
+        _ = self.stats.bytes_sent.fetchAdd(data.len, .seq_cst);
         
         peer.updateActivity();
     }
@@ -636,14 +636,14 @@ pub const WireGuardTunnel = struct {
     fn udpReceiveLoop(self: *WireGuardTunnel) void {
         var buffer: [2048]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             const packet = self.socket.recvFromAsync(&buffer) catch continue;
             
             switch (packet) {
                 .ready => |result| {
                     if (result) |pkt| {
                         self.handleUdpPacket(pkt.data, pkt.address) catch |err| {
-                            _ = self.stats.errors.fetchAdd(1, .SeqCst);
+                            _ = self.stats.errors.fetchAdd(1, .seq_cst);
                             std.log.err("UDP packet handling error: {}", .{err});
                         };
                     } else |_| {
@@ -661,13 +661,13 @@ pub const WireGuardTunnel = struct {
     fn tunReceiveLoop(self: *WireGuardTunnel) void {
         var buffer: [2048]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             if (self.tun_interface) |tun| {
                 const packet_size = tun.readPacket(&buffer) catch continue;
                 const packet = buffer[0..packet_size];
                 
                 self.handleTunPacket(packet) catch |err| {
-                    _ = self.stats.errors.fetchAdd(1, .SeqCst);
+                    _ = self.stats.errors.fetchAdd(1, .seq_cst);
                     std.log.err("TUN packet handling error: {}", .{err});
                 };
             }
@@ -677,7 +677,7 @@ pub const WireGuardTunnel = struct {
     }
     
     fn keepaliveLoop(self: *WireGuardTunnel) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(self.config.keepalive_interval * 1000000000); // Convert to nanoseconds
             
             self.mutex.lock();
@@ -697,7 +697,7 @@ pub const WireGuardTunnel = struct {
     }
     
     fn packetProcessingLoop(self: *WireGuardTunnel) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             if (self.packet_queue.dequeue()) |packet| {
                 self.sendData(packet.data, packet.peer_id) catch |err| {
                     std.log.err("Packet processing error: {}", .{err});
@@ -803,7 +803,7 @@ pub const WireGuardTunnel = struct {
     fn sendKeepalive(self: *WireGuardTunnel, peer_id: u32) !void {
         _ = peer_id;
         // Send keepalive packet
-        _ = self.stats.keepalives_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.keepalives_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handleHandshakeResponse(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
@@ -816,7 +816,7 @@ pub const WireGuardTunnel = struct {
     fn handleKeepalive(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
         _ = data;
         _ = sender_addr;
-        _ = self.stats.keepalives_received.fetchAdd(1, .SeqCst);
+        _ = self.stats.keepalives_received.fetchAdd(1, .seq_cst);
     }
     
     fn handleCookieReply(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {

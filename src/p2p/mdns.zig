@@ -396,14 +396,14 @@ pub const MDNSResolver = struct {
         // Join multicast group
         try self.joinMulticastGroup();
         
-        self.running.store(true, .SeqCst);
+        self.running.store(true, .seq_cst);
         
         // Start receive loop
         _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *MDNSResolver) void {
-        self.running.store(false, .SeqCst);
+        self.running.store(false, .seq_cst);
     }
     
     fn joinMulticastGroup(self: *MDNSResolver) !void {
@@ -484,7 +484,7 @@ pub const MDNSResolver = struct {
         // Send announcement
         try self.sendMessage(&message);
         
-        _ = self.responses_sent.fetchAdd(1, .SeqCst);
+        _ = self.responses_sent.fetchAdd(1, .seq_cst);
     }
     
     fn sendQuery(self: *MDNSResolver, service_type: []const u8) !void {
@@ -503,7 +503,7 @@ pub const MDNSResolver = struct {
         
         try self.sendMessage(&message);
         
-        _ = self.queries_sent.fetchAdd(1, .SeqCst);
+        _ = self.queries_sent.fetchAdd(1, .seq_cst);
     }
     
     fn sendMessage(self: *MDNSResolver, message: *MDNSMessage) !void {
@@ -520,7 +520,7 @@ pub const MDNSResolver = struct {
     fn receiveLoop(self: *MDNSResolver) void {
         var buffer: [4096]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             const packet = self.socket.recvFromAsync(&buffer) catch continue;
             
             switch (packet) {
@@ -595,7 +595,7 @@ pub const MDNSResolver = struct {
                             
                             // Add to discovered services
                             try self.discovered_services.put(service_name, discovered_service);
-                            _ = self.services_discovered.fetchAdd(1, .SeqCst);
+                            _ = self.services_discovered.fetchAdd(1, .seq_cst);
                             
                             // Notify callbacks
                             var callback_iter = self.query_callbacks.iterator();
@@ -632,9 +632,9 @@ pub const MDNSResolver = struct {
         registered_services: usize,
     } {
         return .{
-            .queries_sent = self.queries_sent.load(.SeqCst),
-            .responses_sent = self.responses_sent.load(.SeqCst),
-            .services_discovered = self.services_discovered.load(.SeqCst),
+            .queries_sent = self.queries_sent.load(.seq_cst),
+            .responses_sent = self.responses_sent.load(.seq_cst),
+            .services_discovered = self.services_discovered.load(.seq_cst),
             .registered_services = self.services.count(),
         };
     }

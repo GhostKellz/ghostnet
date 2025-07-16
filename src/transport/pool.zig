@@ -79,7 +79,7 @@ pub const ConnectionPool = struct {
     }
     
     pub fn deinit(self: *ConnectionPool) void {
-        self.shutdown.store(true, .SeqCst);
+        self.shutdown.store(true, .seq_cst);
         
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -104,7 +104,7 @@ pub const ConnectionPool = struct {
     }
     
     pub fn acquire(self: *ConnectionPool, address: transport.Address, options: transport.TransportOptions) !transport.Connection {
-        if (self.shutdown.load(.SeqCst)) {
+        if (self.shutdown.load(.seq_cst)) {
             return error.PoolShutdown;
         }
         
@@ -128,9 +128,9 @@ pub const ConnectionPool = struct {
                         conn_info.last_used_at = std.time.timestamp();
                         conn_info.use_count += 1;
                         
-                        _ = self.stats.current_idle.fetchSub(1, .SeqCst);
-                        _ = self.stats.current_active.fetchAdd(1, .SeqCst);
-                        _ = self.stats.successful_connections.fetchAdd(1, .SeqCst);
+                        _ = self.stats.current_idle.fetchSub(1, .seq_cst);
+                        _ = self.stats.current_active.fetchAdd(1, .seq_cst);
+                        _ = self.stats.successful_connections.fetchAdd(1, .seq_cst);
                         
                         return conn_info.connection;
                     } else {
@@ -158,7 +158,7 @@ pub const ConnectionPool = struct {
             retry_count: u32 = 0,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!transport.Connection) {
-                if (ctx.pool.shutdown.load(.SeqCst)) {
+                if (ctx.pool.shutdown.load(.seq_cst)) {
                     return .{ .ready = transport.TransportError!transport.Connection{ error.TransportClosed } };
                 }
                 
@@ -201,8 +201,8 @@ pub const ConnectionPool = struct {
                         return;
                     };
                     
-                    _ = self.stats.current_active.fetchSub(1, .SeqCst);
-                    _ = self.stats.current_idle.fetchAdd(1, .SeqCst);
+                    _ = self.stats.current_active.fetchSub(1, .seq_cst);
+                    _ = self.stats.current_idle.fetchAdd(1, .seq_cst);
                 } else {
                     // Destroy connection
                     _ = self.active_connections.remove(entry.key_ptr.*);
@@ -234,7 +234,7 @@ pub const ConnectionPool = struct {
             .last_used_at = now,
             .use_count = 1,
             .is_healthy = true,
-            .id = self.next_id.fetchAdd(1, .SeqCst),
+            .id = self.next_id.fetchAdd(1, .seq_cst),
         };
         
         self.mutex.lock();
@@ -243,17 +243,17 @@ pub const ConnectionPool = struct {
         try self.connections.append(conn_info.*);
         try self.active_connections.put(conn_info.id, conn_info);
         
-        _ = self.stats.total_created.fetchAdd(1, .SeqCst);
-        _ = self.stats.current_active.fetchAdd(1, .SeqCst);
-        _ = self.stats.successful_connections.fetchAdd(1, .SeqCst);
+        _ = self.stats.total_created.fetchAdd(1, .seq_cst);
+        _ = self.stats.current_active.fetchAdd(1, .seq_cst);
+        _ = self.stats.successful_connections.fetchAdd(1, .seq_cst);
         
         return conn_info.connection;
     }
     
     fn destroyConnection(self: *ConnectionPool, conn_info: *ConnectionInfo) void {
         conn_info.connection.close();
-        _ = self.stats.total_destroyed.fetchAdd(1, .SeqCst);
-        _ = self.stats.current_idle.fetchSub(1, .SeqCst);
+        _ = self.stats.total_destroyed.fetchAdd(1, .seq_cst);
+        _ = self.stats.current_idle.fetchSub(1, .seq_cst);
     }
     
     fn isConnectionValid(self: *ConnectionPool, conn_info: *ConnectionInfo) bool {
@@ -272,7 +272,7 @@ pub const ConnectionPool = struct {
     }
     
     fn healthCheckLoop(pool: *ConnectionPool) void {
-        while (!pool.shutdown.load(.SeqCst)) {
+        while (!pool.shutdown.load(.seq_cst)) {
             std.time.sleep(pool.config.health_check_interval);
             
             pool.mutex.lock();
@@ -294,12 +294,12 @@ pub const ConnectionPool = struct {
     
     pub fn getStats(self: *ConnectionPool) PoolStats {
         return .{
-            .total_created = std.atomic.Value(u64).init(self.stats.total_created.load(.SeqCst)),
-            .total_destroyed = std.atomic.Value(u64).init(self.stats.total_destroyed.load(.SeqCst)),
-            .current_active = std.atomic.Value(u32).init(self.stats.current_active.load(.SeqCst)),
-            .current_idle = std.atomic.Value(u32).init(self.stats.current_idle.load(.SeqCst)),
-            .failed_connections = std.atomic.Value(u64).init(self.stats.failed_connections.load(.SeqCst)),
-            .successful_connections = std.atomic.Value(u64).init(self.stats.successful_connections.load(.SeqCst)),
+            .total_created = std.atomic.Value(u64).init(self.stats.total_created.load(.seq_cst)),
+            .total_destroyed = std.atomic.Value(u64).init(self.stats.total_destroyed.load(.seq_cst)),
+            .current_active = std.atomic.Value(u32).init(self.stats.current_active.load(.seq_cst)),
+            .current_idle = std.atomic.Value(u32).init(self.stats.current_idle.load(.seq_cst)),
+            .failed_connections = std.atomic.Value(u64).init(self.stats.failed_connections.load(.seq_cst)),
+            .successful_connections = std.atomic.Value(u64).init(self.stats.successful_connections.load(.seq_cst)),
         };
     }
 };

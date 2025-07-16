@@ -333,7 +333,7 @@ pub const QuicConnection = struct {
             return error.ConnectionNotEstablished;
         }
         
-        const stream_id = self.next_stream_id.fetchAdd(1, .SeqCst);
+        const stream_id = self.next_stream_id.fetchAdd(1, .seq_cst);
         const stream = try QuicStream.init(self.allocator, stream_id, stream_type, self);
         
         try self.streams.put(stream_id, stream);
@@ -427,8 +427,8 @@ pub const QuicConnection = struct {
     }
     
     fn handlePacket(self: *QuicConnection, data: []const u8) !void {
-        _ = self.packets_received.fetchAdd(1, .SeqCst);
-        _ = self.bytes_received.fetchAdd(data.len, .SeqCst);
+        _ = self.packets_received.fetchAdd(1, .seq_cst);
+        _ = self.bytes_received.fetchAdd(data.len, .seq_cst);
         
         // Process QUIC packet
         const frames = try self.quic_conn.processPacket(data);
@@ -494,16 +494,16 @@ pub const QuicConnection = struct {
         const packet = try self.quic_conn.createPacket(&[_]zquic.Frame{close_frame});
         _ = try self.socket.sendTo(packet, self.remote_addr);
         
-        _ = self.packets_sent.fetchAdd(1, .SeqCst);
-        _ = self.bytes_sent.fetchAdd(packet.len, .SeqCst);
+        _ = self.packets_sent.fetchAdd(1, .seq_cst);
+        _ = self.bytes_sent.fetchAdd(packet.len, .seq_cst);
     }
     
     fn updateActivity(self: *QuicConnection) void {
-        self.last_activity.store(std.time.timestamp(), .SeqCst);
+        self.last_activity.store(std.time.timestamp(), .seq_cst);
     }
     
     fn isExpired(self: *QuicConnection) bool {
-        const last = self.last_activity.load(.SeqCst);
+        const last = self.last_activity.load(.seq_cst);
         const now = std.time.timestamp();
         return (now - last) > @as(i64, @intCast(self.config.idle_timeout));
     }
@@ -623,14 +623,14 @@ pub const QuicServer = struct {
             .allocator = self.allocator,
         });
         
-        self.running.store(true, .SeqCst);
+        self.running.store(true, .seq_cst);
         
         // Start accept loop
         _ = try self.runtime.spawn(acceptLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *QuicServer) void {
-        self.running.store(false, .SeqCst);
+        self.running.store(false, .seq_cst);
     }
     
     pub fn acceptAsync(self: *QuicServer) zsync.Future(transport.TransportError!transport.Connection) {
@@ -647,7 +647,7 @@ pub const QuicServer = struct {
     fn acceptLoop(self: *QuicServer) void {
         var buffer: [2048]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             const packet = self.socket.recvFromAsync(&buffer) catch continue;
             
             switch (packet) {
@@ -683,11 +683,11 @@ pub const QuicServer = struct {
             connection = try QuicConnection.init(self.allocator, self.runtime, self.config);
             try connection.?.accept(self.socket, remote_addr);
             
-            const new_conn_id = self.next_connection_id.fetchAdd(1, .SeqCst);
+            const new_conn_id = self.next_connection_id.fetchAdd(1, .seq_cst);
             try self.connections.put(new_conn_id, connection.?);
             
-            _ = self.stats.total_connections.fetchAdd(1, .SeqCst);
-            _ = self.stats.active_connections.fetchAdd(1, .SeqCst);
+            _ = self.stats.total_connections.fetchAdd(1, .seq_cst);
+            _ = self.stats.active_connections.fetchAdd(1, .seq_cst);
         }
         
         // Forward packet to connection

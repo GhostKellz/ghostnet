@@ -473,8 +473,8 @@ pub const WebSocketConnection = struct {
         
         _ = try self.stream.writeAsync(frame_data);
         
-        _ = self.bytes_sent.fetchAdd(frame_data.len, .SeqCst);
-        _ = self.messages_sent.fetchAdd(1, .SeqCst);
+        _ = self.bytes_sent.fetchAdd(frame_data.len, .seq_cst);
+        _ = self.messages_sent.fetchAdd(1, .seq_cst);
     }
     
     pub fn receiveMessage(self: *WebSocketConnection) !WebSocketMessage {
@@ -497,7 +497,7 @@ pub const WebSocketConnection = struct {
                         };
                         
                         self.current_opcode = null;
-                        _ = self.messages_received.fetchAdd(1, .SeqCst);
+                        _ = self.messages_received.fetchAdd(1, .seq_cst);
                         
                         return message;
                     }
@@ -516,7 +516,7 @@ pub const WebSocketConnection = struct {
                         };
                         
                         self.current_opcode = null;
-                        _ = self.messages_received.fetchAdd(1, .SeqCst);
+                        _ = self.messages_received.fetchAdd(1, .seq_cst);
                         
                         return message;
                     }
@@ -616,7 +616,7 @@ pub const WebSocketConnection = struct {
         
         try frame_data.appendSlice(payload);
         
-        _ = self.bytes_received.fetchAdd(frame_data.items.len, .SeqCst);
+        _ = self.bytes_received.fetchAdd(frame_data.items.len, .seq_cst);
         
         return WebSocketFrame.deserialize(self.allocator, frame_data.items);
     }
@@ -670,10 +670,10 @@ pub const WebSocketConnection = struct {
         state: WebSocketState,
     } {
         return .{
-            .bytes_sent = self.bytes_sent.load(.SeqCst),
-            .bytes_received = self.bytes_received.load(.SeqCst),
-            .messages_sent = self.messages_sent.load(.SeqCst),
-            .messages_received = self.messages_received.load(.SeqCst),
+            .bytes_sent = self.bytes_sent.load(.seq_cst),
+            .bytes_received = self.bytes_received.load(.seq_cst),
+            .messages_sent = self.messages_sent.load(.seq_cst),
+            .messages_received = self.messages_received.load(.seq_cst),
             .state = self.state,
         };
     }

@@ -607,7 +607,7 @@ pub const KademliaNode = struct {
     pub fn start(self: *KademliaNode, bind_address: transport.Address) !void {
         try self.socket.bind(bind_address, transport.TransportOptions{ .allocator = self.allocator });
         
-        self.running.store(true, .SeqCst);
+        self.running.store(true, .seq_cst);
         
         // Start background tasks
         _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
@@ -616,7 +616,7 @@ pub const KademliaNode = struct {
     }
     
     pub fn stop(self: *KademliaNode) void {
-        self.running.store(false, .SeqCst);
+        self.running.store(false, .seq_cst);
     }
     
     pub fn bootstrap(self: *KademliaNode, bootstrap_nodes: []const NodeContact) !void {
@@ -637,7 +637,7 @@ pub const KademliaNode = struct {
     }
     
     pub fn findNode(self: *KademliaNode, target_id: NodeID) ![]NodeContact {
-        _ = self.stats.lookup_operations.fetchAdd(1, .SeqCst);
+        _ = self.stats.lookup_operations.fetchAdd(1, .seq_cst);
         
         // Start with closest known nodes
         const closest_nodes = self.routing_table.findClosestNodes(target_id, self.config.k);
@@ -731,7 +731,7 @@ pub const KademliaNode = struct {
     }
     
     pub fn store(self: *KademliaNode, key: []const u8, value: []const u8) !void {
-        _ = self.stats.store_operations.fetchAdd(1, .SeqCst);
+        _ = self.stats.store_operations.fetchAdd(1, .seq_cst);
         
         // Calculate target ID from key
         var target_id: NodeID = undefined;
@@ -767,7 +767,7 @@ pub const KademliaNode = struct {
         // Remove old item if exists
         if (self.storage.fetchRemove(key)) |kv| {
             kv.value.deinit(self.allocator);
-            _ = self.stats.storage_items.fetchSub(1, .SeqCst);
+            _ = self.stats.storage_items.fetchSub(1, .seq_cst);
         }
         
         // Check storage limits
@@ -779,7 +779,7 @@ pub const KademliaNode = struct {
         // Store new item
         const item = try StorageItem.init(self.allocator, key, value, self.config.storage_ttl);
         try self.storage.put(key, item);
-        _ = self.stats.storage_items.fetchAdd(1, .SeqCst);
+        _ = self.stats.storage_items.fetchAdd(1, .seq_cst);
     }
     
     fn evictOldestItem(self: *KademliaNode) void {
@@ -797,7 +797,7 @@ pub const KademliaNode = struct {
         if (oldest_key) |key| {
             if (self.storage.fetchRemove(key)) |kv| {
                 kv.value.deinit(self.allocator);
-                _ = self.stats.storage_items.fetchSub(1, .SeqCst);
+                _ = self.stats.storage_items.fetchSub(1, .seq_cst);
             }
         }
     }
@@ -807,13 +807,13 @@ pub const KademliaNode = struct {
         defer self.allocator.free(data);
         
         _ = try self.socket.sendTo(data, address);
-        _ = self.stats.requests_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.requests_sent.fetchAdd(1, .seq_cst);
     }
     
     fn receiveLoop(self: *KademliaNode) void {
         var buffer: [65536]u8 = undefined;
         
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             const packet = self.socket.recvFromAsync(&buffer) catch continue;
             
             switch (packet) {
@@ -841,39 +841,39 @@ pub const KademliaNode = struct {
         // Add sender to routing table
         const sender_contact = NodeContact.init(message.sender_id, sender_addr);
         try self.routing_table.addNode(sender_contact);
-        _ = self.stats.nodes_discovered.fetchAdd(1, .SeqCst);
+        _ = self.stats.nodes_discovered.fetchAdd(1, .seq_cst);
         
         switch (message.message_type) {
             .ping => {
-                _ = self.stats.requests_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.requests_received.fetchAdd(1, .seq_cst);
                 try self.handlePing(&message, sender_addr);
             },
             .pong => {
-                _ = self.stats.responses_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.responses_received.fetchAdd(1, .seq_cst);
                 try self.handlePong(&message, sender_addr);
             },
             .find_node => {
-                _ = self.stats.requests_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.requests_received.fetchAdd(1, .seq_cst);
                 try self.handleFindNode(&message, sender_addr);
             },
             .find_node_response => {
-                _ = self.stats.responses_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.responses_received.fetchAdd(1, .seq_cst);
                 try self.handleFindNodeResponse(&message, sender_addr);
             },
             .find_value => {
-                _ = self.stats.requests_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.requests_received.fetchAdd(1, .seq_cst);
                 try self.handleFindValue(&message, sender_addr);
             },
             .find_value_response => {
-                _ = self.stats.responses_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.responses_received.fetchAdd(1, .seq_cst);
                 try self.handleFindValueResponse(&message, sender_addr);
             },
             .store => {
-                _ = self.stats.requests_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.requests_received.fetchAdd(1, .seq_cst);
                 try self.handleStore(&message, sender_addr);
             },
             .store_response => {
-                _ = self.stats.responses_received.fetchAdd(1, .SeqCst);
+                _ = self.stats.responses_received.fetchAdd(1, .seq_cst);
                 try self.handleStoreResponse(&message, sender_addr);
             },
         }
@@ -886,7 +886,7 @@ pub const KademliaNode = struct {
         response.transaction_id = message.transaction_id;
         
         try self.sendMessage(&response, sender_addr);
-        _ = self.stats.responses_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.responses_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handlePong(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -907,7 +907,7 @@ pub const KademliaNode = struct {
         }
         
         try self.sendMessage(&response, sender_addr);
-        _ = self.stats.responses_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.responses_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handleFindNodeResponse(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -934,7 +934,7 @@ pub const KademliaNode = struct {
         }
         
         try self.sendMessage(&response, sender_addr);
-        _ = self.stats.responses_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.responses_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handleFindValueResponse(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -957,7 +957,7 @@ pub const KademliaNode = struct {
         response.transaction_id = message.transaction_id;
         
         try self.sendMessage(&response, sender_addr);
-        _ = self.stats.responses_sent.fetchAdd(1, .SeqCst);
+        _ = self.stats.responses_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handleStoreResponse(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -968,7 +968,7 @@ pub const KademliaNode = struct {
     }
     
     fn maintenanceLoop(self: *KademliaNode) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(60000000000); // 1 minute
             
             self.mutex.lock();
@@ -988,14 +988,14 @@ pub const KademliaNode = struct {
             for (keys_to_remove.items) |key| {
                 if (self.storage.fetchRemove(key)) |kv| {
                     kv.value.deinit(self.allocator);
-                    _ = self.stats.storage_items.fetchSub(1, .SeqCst);
+                    _ = self.stats.storage_items.fetchSub(1, .seq_cst);
                 }
             }
         }
     }
     
     fn refreshLoop(self: *KademliaNode) void {
-        while (self.running.load(.SeqCst)) {
+        while (self.running.load(.seq_cst)) {
             std.time.sleep(self.config.refresh_interval * 1000000); // Convert to nanoseconds
             
             // Refresh routing table buckets

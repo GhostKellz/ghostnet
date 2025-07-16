@@ -82,7 +82,6 @@ pub const ConnectionPool = struct {
         self.shutdown.store(true, .seq_cst);
         
         self.mutex.lock();
-        defer self.mutex.unlock();
         
         // Close all connections
         for (self.connections.items) |*conn_info| {
@@ -99,6 +98,8 @@ pub const ConnectionPool = struct {
             entry.value_ptr.deinit();
         }
         self.address_pools.deinit();
+        
+        self.mutex.unlock();
         
         self.allocator.destroy(self);
     }

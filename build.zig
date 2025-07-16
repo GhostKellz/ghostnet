@@ -37,10 +37,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    const zquic_dep = b.dependency("zquic", .{
-        .target = target,
-        .optimize = optimize,
-    });
 
     const mod = b.addModule("ghostnet", .{
         // The root source file is the "entry point" of this module. Users of
@@ -56,7 +52,6 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "zsync", .module = zsync_dep.module("zsync") },
             .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
-            .{ .name = "zquic", .module = zquic_dep.module("zquic") },
         },
     });
 

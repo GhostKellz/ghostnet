@@ -74,7 +74,7 @@ pub const MiddlewareChain = middleware.MiddlewareChain;
 pub const Middleware = middleware.Middleware;
 pub const RetryConfig = middleware.RetryConfig;
 pub const HttpError = http_errors.HttpError;
-pub const ErrorContext = http_errors.ErrorContext;
+pub const HttpErrorContext = http_errors.ErrorContext;
 
 test {
     std.testing.refAllDecls(@This());

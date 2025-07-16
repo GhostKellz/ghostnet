@@ -183,7 +183,7 @@ pub const RetryMiddleware = struct {
         return std.math.min(delay, self.config.max_delay_ms);
     }
     
-    pub fn create(config: RetryConfig) Middleware {
+    pub fn create(_: RetryConfig) Middleware {
         // Note: This is a simplified implementation
         // In a real implementation, you'd need to store the config in a way
         // that can be accessed by the middleware function
@@ -234,7 +234,7 @@ pub const TimeoutMiddleware = struct {
         return .continue_chain;
     }
     
-    pub fn create(timeout_ms: u64) Middleware {
+    pub fn create(_: u64) Middleware {
         // Simplified implementation
         return Middleware{
             .name = "timeout",

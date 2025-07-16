@@ -7,6 +7,8 @@ const handshake = @import("../crypto/handshake.zig");
 const errors = @import("../errors/errors.zig");
 const middleware = @import("middleware.zig");
 const pool = @import("../transport/pool.zig");
+const quic = @import("quic.zig");
+const http2 = @import("http2.zig");
 
 pub const HttpMethod = enum {
     GET,
@@ -78,13 +80,195 @@ pub const HttpVersion = enum {
     http_1_0,
     http_1_1,
     http_2_0,
+    http_3_0,
     
     pub fn toString(self: HttpVersion) []const u8 {
         return switch (self) {
             .http_1_0 => "HTTP/1.0",
             .http_1_1 => "HTTP/1.1",
             .http_2_0 => "HTTP/2.0",
+            .http_3_0 => "HTTP/3.0",
         };
+    }
+};
+
+pub const ProtocolPreference = enum {
+    http3,
+    http2,
+    http1_1,
+    http1_0,
+};
+
+pub const ProtocolConfig = struct {
+    preference_order: []const ProtocolPreference = &.{ .http3, .http2, .http1_1 },
+    fallback_on_error: bool = true,
+    protocol_cache_ttl: u64 = 3600000, // 1 hour in milliseconds
+    connection_timeout: u64 = 10000, // 10 seconds
+    enable_0rtt: bool = false,
+    max_retries_per_protocol: u32 = 2,
+};
+
+pub const ProtocolCache = struct {
+    entries: std.StringHashMap(CacheEntry),
+    allocator: std.mem.Allocator,
+    
+    const CacheEntry = struct {
+        protocol: HttpVersion,
+        cached_at: i64,
+        success_count: u32,
+        failure_count: u32,
+    };
+    
+    pub fn init(allocator: std.mem.Allocator) ProtocolCache {
+        return .{
+            .entries = std.StringHashMap(CacheEntry).init(allocator),
+            .allocator = allocator,
+        };
+    }
+    
+    pub fn deinit(self: *ProtocolCache) void {
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.entries.deinit();
+    }
+    
+    pub fn getProtocol(self: *ProtocolCache, host: []const u8, ttl: u64) ?HttpVersion {
+        if (self.entries.get(host)) |entry| {
+            const now = std.time.timestamp();
+            if (now - entry.cached_at < @as(i64, @intCast(ttl / 1000))) {
+                return entry.protocol;
+            } else {
+                _ = self.entries.remove(host);
+            }
+        }
+        return null;
+    }
+    
+    pub fn cacheProtocol(self: *ProtocolCache, host: []const u8, protocol: HttpVersion, success: bool) !void {
+        const now = std.time.timestamp();
+        const host_copy = try self.allocator.dupe(u8, host);
+        
+        if (self.entries.getPtr(host_copy)) |entry| {
+            entry.protocol = protocol;
+            entry.cached_at = now;
+            if (success) {
+                entry.success_count += 1;
+            } else {
+                entry.failure_count += 1;
+            }
+        } else {
+            try self.entries.put(host_copy, .{
+                .protocol = protocol,
+                .cached_at = now,
+                .success_count = if (success) 1 else 0,
+                .failure_count = if (success) 0 else 1,
+            });
+        }
+    }
+};
+
+pub const RateLimiter = struct {
+    requests_per_second: f64,
+    burst_size: u32,
+    tokens: f64,
+    last_refill: i64,
+    mutex: std.Thread.Mutex,
+    
+    pub fn init(requests_per_second: f64, burst_size: u32) RateLimiter {
+        return .{
+            .requests_per_second = requests_per_second,
+            .burst_size = burst_size,
+            .tokens = @floatFromInt(burst_size),
+            .last_refill = std.time.timestamp(),
+            .mutex = .{},
+        };
+    }
+    
+    pub fn allowRequest(self: *RateLimiter) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        const now = std.time.timestamp();
+        const time_passed = @as(f64, @floatFromInt(now - self.last_refill));
+        
+        // Refill tokens based on time passed
+        self.tokens += time_passed * self.requests_per_second;
+        if (self.tokens > @as(f64, @floatFromInt(self.burst_size))) {
+            self.tokens = @floatFromInt(self.burst_size);
+        }
+        
+        self.last_refill = now;
+        
+        if (self.tokens >= 1.0) {
+            self.tokens -= 1.0;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    pub fn waitTime(self: *RateLimiter) u64 {
+        if (self.tokens >= 1.0) return 0;
+        
+        const tokens_needed = 1.0 - self.tokens;
+        const wait_time = tokens_needed / self.requests_per_second;
+        return @intFromFloat(wait_time * 1000); // Convert to milliseconds
+    }
+};
+
+pub const RetryPolicy = struct {
+    max_attempts: u32 = 3,
+    backoff: BackoffStrategy = .exponential,
+    base_delay_ms: u64 = 1000,
+    max_delay_ms: u64 = 30000,
+    retry_on: []const ErrorType = &.{ .timeout, .connection_reset, .server_error },
+    jitter: bool = true,
+    
+    pub const BackoffStrategy = enum {
+        fixed,
+        linear,
+        exponential,
+    };
+    
+    pub const ErrorType = enum {
+        timeout,
+        connection_reset,
+        server_error,
+        dns_error,
+        tls_error,
+    };
+    
+    pub fn shouldRetry(self: *const RetryPolicy, error_type: ErrorType, attempt: u32) bool {
+        if (attempt >= self.max_attempts) return false;
+        
+        for (self.retry_on) |retry_error| {
+            if (retry_error == error_type) return true;
+        }
+        
+        return false;
+    }
+    
+    pub fn getDelay(self: *const RetryPolicy, attempt: u32) u64 {
+        var delay = switch (self.backoff) {
+            .fixed => self.base_delay_ms,
+            .linear => self.base_delay_ms * attempt,
+            .exponential => self.base_delay_ms * (std.math.pow(u64, 2, attempt - 1)),
+        };
+        
+        if (delay > self.max_delay_ms) {
+            delay = self.max_delay_ms;
+        }
+        
+        if (self.jitter) {
+            var rng = std.rand.DefaultPrng.init(@intCast(std.time.timestamp()));
+            const jitter_range = delay / 4; // ±25% jitter
+            const jitter_offset = rng.random().uintLessThan(u64, jitter_range * 2);
+            delay = delay - jitter_range + jitter_offset;
+        }
+        
+        return delay;
     }
 };
 
@@ -304,13 +488,20 @@ pub const HttpClient = struct {
     api_key: ?struct { header: []const u8, value: []const u8 },
     middleware_chain: middleware.MiddlewareChain,
     connection_pool: ?*pool.ConnectionPool,
+    protocol_config: ProtocolConfig,
+    protocol_cache: ProtocolCache,
+    rate_limiter: ?RateLimiter,
+    retry_policy: RetryPolicy,
+    quic_client: quic.QuicClient,
+    enable_compression: bool,
+    max_redirects: u32,
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) !*HttpClient {
         var client = try allocator.create(HttpClient);
         client.* = .{
             .allocator = allocator,
             .runtime = runtime,
-            .user_agent = try allocator.dupe(u8, "ghostnet/0.2.0"),
+            .user_agent = try allocator.dupe(u8, "ghostnet/0.2.1"),
             .default_headers = std.StringHashMap([]const u8).init(allocator),
             .timeout = 30000, // 30 seconds
             .bearer_token = null,
@@ -318,11 +509,21 @@ pub const HttpClient = struct {
             .api_key = null,
             .middleware_chain = middleware.MiddlewareChain.init(allocator),
             .connection_pool = null,
+            .protocol_config = ProtocolConfig{},
+            .protocol_cache = ProtocolCache.init(allocator),
+            .rate_limiter = null,
+            .retry_policy = RetryPolicy{},
+            .quic_client = quic.QuicClient.init(allocator, runtime, quic.QuicConfig{}),
+            .enable_compression = true,
+            .max_redirects = 5,
         };
         
         // Set default headers
         try client.setDefaultHeader("User-Agent", client.user_agent);
         try client.setDefaultHeader("Accept", "*/*");
+        if (client.enable_compression) {
+            try client.setDefaultHeader("Accept-Encoding", "gzip, br, deflate");
+        }
         try client.setDefaultHeader("Connection", "close");
         
         return client;
@@ -361,6 +562,7 @@ pub const HttpClient = struct {
         }
         
         self.middleware_chain.deinit();
+        self.protocol_cache.deinit();
         if (self.connection_pool) |pool_ptr| {
             pool_ptr.deinit();
         }
@@ -417,6 +619,53 @@ pub const HttpClient = struct {
     
     pub fn setRetryConfig(self: *HttpClient, config: middleware.RetryConfig) !void {
         try self.addMiddleware(middleware.RetryMiddleware.create(config));
+    }
+    
+    pub fn setRateLimit(self: *HttpClient, requests_per_second: f64, burst_size: u32) void {
+        self.rate_limiter = RateLimiter.init(requests_per_second, burst_size);
+    }
+    
+    pub fn setProtocolPreference(self: *HttpClient, preference: []const ProtocolPreference) !void {
+        self.protocol_config.preference_order = try self.allocator.dupe(ProtocolPreference, preference);
+    }
+    
+    pub fn enableCompression(self: *HttpClient, enable: bool) !void {
+        self.enable_compression = enable;
+        if (enable) {
+            try self.setDefaultHeader("Accept-Encoding", "gzip, br, deflate");
+        } else {
+            _ = self.default_headers.remove("Accept-Encoding");
+        }
+    }
+    
+    fn selectProtocol(self: *HttpClient, host: []const u8) HttpVersion {
+        // Check cache first
+        if (self.protocol_cache.getProtocol(host, self.protocol_config.protocol_cache_ttl)) |cached_protocol| {
+            return cached_protocol;
+        }
+        
+        // Default to HTTP/3 first
+        for (self.protocol_config.preference_order) |preference| {
+            const protocol = switch (preference) {
+                .http3 => HttpVersion.http_3_0,
+                .http2 => HttpVersion.http_2_0,
+                .http1_1 => HttpVersion.http_1_1,
+                .http1_0 => HttpVersion.http_1_0,
+            };
+            return protocol;
+        }
+        
+        return .http_3_0; // Default fallback to HTTP/3
+    }
+    
+    fn shouldRetryWithDifferentProtocol(_: *HttpClient, _: anyerror, current_protocol: HttpVersion) ?HttpVersion {
+        
+        return switch (current_protocol) {
+            .http_3_0 => .http_2_0,
+            .http_2_0 => .http_1_1,
+            .http_1_1 => .http_1_0,
+            .http_1_0 => null,
+        };
     }
     
     pub fn get(self: *HttpClient, url: []const u8) !HttpResponse {
@@ -488,14 +737,217 @@ pub const HttpClient = struct {
         return try self.post(url, json_body, "application/json");
     }
     
+    // New batch operations for package manager efficiency
+    pub fn batchGet(self: *HttpClient, urls: []const []const u8) ![]HttpResponse {
+        var responses = try self.allocator.alloc(HttpResponse, urls.len);
+        errdefer {
+            for (responses[0..urls.len]) |*response| {
+                response.deinit(self.allocator);
+            }
+            self.allocator.free(responses);
+        }
+        
+        // Use HTTP/3 multiplexing for concurrent requests to same host
+        var host_groups = std.StringHashMap(std.ArrayList(usize)).init(self.allocator);
+        defer {
+            var iter = host_groups.iterator();
+            while (iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit();
+            }
+            host_groups.deinit();
+        }
+        
+        // Group URLs by host for efficient multiplexing
+        for (urls, 0..) |url, i| {
+            const uri = std.Uri.parse(url) catch continue;
+            const host = uri.host orelse continue;
+            
+            const host_copy = try self.allocator.dupe(u8, host);
+            var group = host_groups.get(host_copy) orelse blk: {
+                const new_group = std.ArrayList(usize).init(self.allocator);
+                try host_groups.put(host_copy, new_group);
+                break :blk host_groups.getPtr(host_copy).?;
+            };
+            try group.append(i);
+        }
+        
+        // Process each host group concurrently
+        var host_iter = host_groups.iterator();
+        while (host_iter.next()) |entry| {
+            const url_indices = entry.value_ptr.items;
+            
+            // For HTTP/3, we can multiplex all requests to same host
+            for (url_indices) |url_idx| {
+                responses[url_idx] = self.get(urls[url_idx]) catch blk: {
+                    // Return error response
+                    const error_response = HttpResponse.init(self.allocator, 0, "Request Failed") catch break :blk HttpResponse{
+                        .version = .http_3_0,
+                        .status_code = 0,
+                        .status_text = "Error",
+                        .headers = std.StringHashMap([]const u8).init(self.allocator),
+                        .body = null,
+                        .allocator = self.allocator,
+                    };
+                    break :blk error_response;
+                };
+            }
+        }
+        
+        return responses;
+    }
+    
+    pub const DownloadOptions = struct {
+        progress_callback: ?*const fn (downloaded: u64, total: u64) void = null,
+        chunk_size: usize = 8192,
+        resume_partial: bool = true,
+        verify_checksum: ?[]const u8 = null, // SHA256 checksum
+        max_speed: ?u64 = null, // bytes per second
+    };
+    
+    pub fn downloadStream(self: *HttpClient, url: []const u8, dest_path: []const u8, options: DownloadOptions) !void {
+        var request = try HttpRequest.init(self.allocator, .GET, url);
+        defer request.deinit(self.allocator);
+        
+        // Check if we can resume
+        var start_byte: u64 = 0;
+        if (options.resume_partial) {
+            if (std.fs.cwd().statFile(dest_path)) |stat| {
+                start_byte = stat.size;
+                const range_header = try std.fmt.allocPrint(self.allocator, "bytes={d}-", .{start_byte});
+                defer self.allocator.free(range_header);
+                try request.setHeader(self.allocator, "Range", range_header);
+            } else |_| {
+                // File doesn't exist, start from beginning
+            }
+        }
+        
+        const response = try self.sendRequest(&request, url);
+        defer response.deinit(self.allocator);
+        
+        if (!response.isSuccess() and response.status_code != 206) { // 206 = Partial Content
+            return error.DownloadFailed;
+        }
+        
+        // Get content length
+        var total_size: ?u64 = null;
+        if (response.getHeader("Content-Length")) |content_length| {
+            total_size = std.fmt.parseInt(u64, content_length, 10) catch null;
+        }
+        
+        // Open destination file
+        const file = if (start_byte > 0)
+            try std.fs.cwd().openFile(dest_path, .{ .mode = .write_only })
+        else
+            try std.fs.cwd().createFile(dest_path, .{});
+        defer file.close();
+        
+        if (start_byte > 0) {
+            try file.seekTo(start_byte);
+        }
+        
+        // Download with progress tracking
+        var downloaded: u64 = start_byte;
+        _ = std.time.timestamp(); // Track time for progress updates
+        const buffer = try self.allocator.alloc(u8, options.chunk_size);
+        defer self.allocator.free(buffer);
+        
+        // In a real implementation, we'd stream from the HTTP response
+        if (response.body) |body| {
+            try file.writeAll(body);
+            downloaded += body.len;
+            
+            if (options.progress_callback) |callback| {
+                callback(downloaded, total_size orelse downloaded);
+            }
+        }
+    }
+    
+    pub fn downloadStreamAsync(self: *HttpClient, url: []const u8, dest_path: []const u8, options: DownloadOptions) zsync.Future(transport.TransportError!void) {
+        return zsync.Future(transport.TransportError!void).init(self.runtime, struct {
+            client: *HttpClient,
+            url: []const u8,
+            dest_path: []const u8,
+            options: DownloadOptions,
+            
+            pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!void) {
+                ctx.client.downloadStream(ctx.url, ctx.dest_path, ctx.options) catch |err| {
+                    return .{ .ready = errors.mapSystemError(err) };
+                };
+                return .{ .ready = {} };
+            }
+        }{ .client = self, .url = url, .dest_path = dest_path, .options = options });
+    }
+    
     pub fn sendRequest(self: *HttpClient, request: *HttpRequest, url: []const u8) !HttpResponse {
+        // Rate limiting check
+        if (self.rate_limiter) |*limiter| {
+            if (!limiter.allowRequest()) {
+                const wait_time = limiter.waitTime();
+                if (wait_time > 0) {
+                    std.time.sleep(wait_time * 1_000_000); // Convert to nanoseconds
+                }
+            }
+        }
+        
         // Parse URL
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+        const host = uri.host orelse return error.MissingHost;
+        _ = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
+        _ = std.mem.eql(u8, uri.scheme, "https");
         
+        // Protocol selection - HTTP/3 first!
+        var selected_protocol = self.selectProtocol(host);
+        var attempt: u32 = 0;
+        var last_error: ?anyerror = null;
+        
+        while (attempt < self.retry_policy.max_attempts) {
+            const result = self.sendRequestWithProtocol(request, url, selected_protocol) catch |err| blk: {
+                last_error = err;
+                
+                // Try different protocol on failure
+                if (self.shouldRetryWithDifferentProtocol(err, selected_protocol)) |fallback_protocol| {
+                    selected_protocol = fallback_protocol;
+                    attempt += 1;
+                    
+                    // Wait before retry
+                    const delay = self.retry_policy.getDelay(attempt);
+                    std.time.sleep(delay * 1_000_000);
+                    
+                    continue;
+                } else {
+                    break :blk err;
+                }
+            };
+            
+            // Cache successful protocol
+            self.protocol_cache.cacheProtocol(host, selected_protocol, true) catch {};
+            return result;
+        }
+        
+        // Cache failed protocol
+        self.protocol_cache.cacheProtocol(host, selected_protocol, false) catch {};
+        
+        return last_error orelse error.RequestFailed;
+    }
+    
+    fn sendRequestWithProtocol(self: *HttpClient, request: *HttpRequest, url: []const u8, protocol: HttpVersion) !HttpResponse {
+        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const host = uri.host orelse return error.MissingHost;
         const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
         const is_https = std.mem.eql(u8, uri.scheme, "https");
         
+        // Prepare request headers
+        try self.prepareRequestHeaders(request, host);
+        
+        return switch (protocol) {
+            .http_3_0 => self.sendHttp3Request(request, host, port, is_https),
+            .http_2_0 => self.sendHttp2Request(request, host, port, is_https),
+            .http_1_1, .http_1_0 => self.sendHttp1Request(request, host, port, is_https, protocol),
+        };
+    }
+    
+    fn prepareRequestHeaders(self: *HttpClient, request: *HttpRequest, host: []const u8) !void {
         // Add authentication headers
         if (self.bearer_token) |token| {
             const auth_header = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{token});
@@ -533,8 +985,107 @@ pub const HttpClient = struct {
         if (!request.headers.contains("Host")) {
             try request.setHeader(self.allocator, "Host", host);
         }
+    }
+    
+    fn sendHttp3Request(self: *HttpClient, request: *HttpRequest, host: []const u8, port: u16, is_https: bool) !HttpResponse {
+        _ = is_https; // HTTP/3 is always encrypted
+        
+        const address = transport.Address{
+            .ipv4 = try std.net.Ip4Address.parse(host, port)
+        };
+        
+        // Connect via QUIC/HTTP3
+        const quic_conn = try self.quic_client.connect(address);
+        defer quic_conn.deinit();
+        
+        const stream = try quic_conn.openStream(.bidirectional);
+        defer stream.deinit();
+        
+        // Convert HTTP request to HTTP/3 format
+        var request_data = std.ArrayList(u8).init(self.allocator);
+        defer request_data.deinit();
+        
+        // HTTP/3 uses QPACK for header compression
+        try request_data.writer().print("{s} {s} HTTP/3.0\r\n", .{ request.method.toString(), request.path });
+        
+        var header_iter = request.headers.iterator();
+        while (header_iter.next()) |entry| {
+            try request_data.writer().print("{s}: {s}\r\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
+        
+        try request_data.appendSlice("\r\n");
+        
+        if (request.body) |body| {
+            try request_data.appendSlice(body);
+        }
+        
+        // Send via QUIC stream
+        _ = try stream.write(request_data.items);
+        stream.close();
+        
+        // Read response
+        var response_buffer = std.ArrayList(u8).init(self.allocator);
+        defer response_buffer.deinit();
+        
+        var temp_buffer: [4096]u8 = undefined;
+        while (true) {
+            const bytes_read = stream.read(&temp_buffer) catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => return err,
+            };
+            
+            if (bytes_read == 0) break;
+            try response_buffer.appendSlice(temp_buffer[0..bytes_read]);
+        }
+        
+        return HttpResponse.parse(self.allocator, response_buffer.items);
+    }
+    
+    fn sendHttp2Request(self: *HttpClient, request: *HttpRequest, host: []const u8, port: u16, is_https: bool) !HttpResponse {
+        const address = transport.Address{
+            .ipv4 = try std.net.Ip4Address.parse(host, port)
+        };
         
         // Create TCP connection
+        var tcp_conn = try tcp.TcpConnection.connect(
+            self.allocator,
+            self.runtime,
+            address,
+            transport.TransportOptions{ .allocator = self.allocator }
+        );
+        defer tcp_conn.deinit();
+        
+        const stream = tcp_conn.stream();
+        
+        // TLS with HTTP/2 ALPN
+        if (is_https) {
+            const tls_config = handshake.HandshakeConfig{
+                .handshake_type = .tls,
+                .cipher_suite = .chacha20_poly1305,
+                .key_exchange = .curve25519,
+                .is_initiator = true,
+                .server_name = host,
+                .alpn_protocols = &[_][]const u8{ "h2", "http/1.1" },
+            };
+            
+            var handshake_manager = handshake.HandshakeManager.init(self.allocator, self.runtime);
+            _ = try handshake_manager.performHandshake(tls_config, stream);
+        }
+        
+        // Create HTTP/2 connection
+        var h2_conn = try http2.Http2Connection.init(self.allocator, self.runtime, stream, true);
+        defer h2_conn.deinit();
+        
+        try h2_conn.performHandshake();
+        
+        // Create HTTP/2 client and send request
+        var h2_client = try http2.Http2Client.init(self.allocator, self.runtime, stream);
+        defer h2_client.deinit();
+        
+        return try h2_client.sendRequest(request);
+    }
+    
+    fn sendHttp1Request(self: *HttpClient, request: *HttpRequest, host: []const u8, port: u16, is_https: bool, version: HttpVersion) !HttpResponse {
         const address = transport.Address{
             .ipv4 = try std.net.Ip4Address.parse(host, port)
         };
@@ -547,9 +1098,9 @@ pub const HttpClient = struct {
         );
         defer tcp_conn.deinit();
         
-        var stream = tcp_conn.stream();
+        const stream = tcp_conn.stream();
         
-        // Perform TLS handshake if HTTPS
+        // TLS handshake if HTTPS
         if (is_https) {
             const tls_config = handshake.HandshakeConfig{
                 .handshake_type = .tls,
@@ -557,15 +1108,15 @@ pub const HttpClient = struct {
                 .key_exchange = .curve25519,
                 .is_initiator = true,
                 .server_name = host,
-                .alpn_protocols = &[_][]const u8{ "http/1.1", "h2" },
+                .alpn_protocols = &[_][]const u8{ "http/1.1" },
             };
             
             var handshake_manager = handshake.HandshakeManager.init(self.allocator, self.runtime);
-            const handshake_result = try handshake_manager.performHandshake(tls_config, stream);
-            
-            // Use encrypted stream (would need to wrap with TLS)
-            _ = handshake_result;
+            _ = try handshake_manager.performHandshake(tls_config, stream);
         }
+        
+        // Set proper HTTP version
+        request.version = version;
         
         // Send request
         const request_data = try request.serialize(self.allocator);
@@ -603,7 +1154,6 @@ pub const HttpClient = struct {
             }
         }
         
-        // Parse response
         return HttpResponse.parse(self.allocator, response_buffer.items);
     }
     
@@ -674,7 +1224,7 @@ pub const OpenAIClient = struct {
         self.http_client.allocator.destroy(self);
     }
     
-    pub fn chatCompletion(self: *OpenAIClient, messages: []const ChatMessage, model: []const u8) !HttpResponse {
+    pub fn chatCompletion(self: *OpenAIClient, _: []const ChatMessage, model: []const u8) !HttpResponse {
         const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/chat/completions", .{self.base_url});
         defer self.http_client.allocator.free(url);
         

@@ -156,7 +156,7 @@ pub const Http2Connection = struct {
     };
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, transport_stream: transport.Stream, is_client: bool) !*Http2Connection {
-        var conn = try allocator.create(Http2Connection);
+        const conn = try allocator.create(Http2Connection);
         conn.* = .{
             .allocator = allocator,
             .runtime = runtime,

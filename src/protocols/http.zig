@@ -140,7 +140,9 @@ pub const ProtocolCache = struct {
             if (now - entry.cached_at < @as(i64, @intCast(ttl / 1000))) {
                 return entry.protocol;
             } else {
-                _ = self.entries.remove(host);
+                if (self.entries.fetchRemove(host)) |kv| {
+                    self.allocator.free(kv.key);
+                }
             }
         }
         return null;
@@ -148,9 +150,8 @@ pub const ProtocolCache = struct {
     
     pub fn cacheProtocol(self: *ProtocolCache, host: []const u8, protocol: HttpVersion, success: bool) !void {
         const now = std.time.timestamp();
-        const host_copy = try self.allocator.dupe(u8, host);
         
-        if (self.entries.getPtr(host_copy)) |entry| {
+        if (self.entries.getPtr(host)) |entry| {
             entry.protocol = protocol;
             entry.cached_at = now;
             if (success) {
@@ -159,6 +160,7 @@ pub const ProtocolCache = struct {
                 entry.failure_count += 1;
             }
         } else {
+            const host_copy = try self.allocator.dupe(u8, host);
             try self.entries.put(host_copy, .{
                 .protocol = protocol,
                 .cached_at = now,
@@ -307,7 +309,14 @@ pub const HttpRequest = struct {
     pub fn setHeader(self: *HttpRequest, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
         const name_copy = try allocator.dupe(u8, name);
         const value_copy = try allocator.dupe(u8, value);
-        try self.headers.put(name_copy, value_copy);
+        
+        // Free old header if it exists
+        if (self.headers.fetchPut(name_copy, value_copy)) |old_kv| {
+            allocator.free(old_kv.key);
+            allocator.free(old_kv.value);
+        } else |err| {
+            return err;
+        }
     }
     
     pub fn setBody(self: *HttpRequest, allocator: std.mem.Allocator, body: []const u8) !void {
@@ -315,6 +324,7 @@ pub const HttpRequest = struct {
         
         // Set Content-Length header
         const content_length = try std.fmt.allocPrint(allocator, "{d}", .{body.len});
+        defer allocator.free(content_length);
         try self.setHeader(allocator, "Content-Length", content_length);
     }
     
@@ -379,7 +389,14 @@ pub const HttpResponse = struct {
     pub fn setHeader(self: *HttpResponse, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
         const name_copy = try allocator.dupe(u8, name);
         const value_copy = try allocator.dupe(u8, value);
-        try self.headers.put(name_copy, value_copy);
+        
+        // Free old header if it exists
+        if (self.headers.fetchPut(name_copy, value_copy)) |old_kv| {
+            allocator.free(old_kv.key);
+            allocator.free(old_kv.value);
+        } else |err| {
+            return err;
+        }
     }
     
     pub fn setBody(self: *HttpResponse, allocator: std.mem.Allocator, body: []const u8) !void {
@@ -387,6 +404,7 @@ pub const HttpResponse = struct {
         
         // Set Content-Length header
         const content_length = try std.fmt.allocPrint(allocator, "{d}", .{body.len});
+        defer allocator.free(content_length);
         try self.setHeader(allocator, "Content-Length", content_length);
     }
     
@@ -561,6 +579,11 @@ pub const HttpClient = struct {
             self.allocator.free(key.value);
         }
         
+        // Free protocol preference order if allocated
+        if (self.protocol_config.preference_order.len > 0) {
+            self.allocator.free(self.protocol_config.preference_order);
+        }
+        
         self.middleware_chain.deinit();
         self.protocol_cache.deinit();
         if (self.connection_pool) |pool_ptr| {
@@ -573,7 +596,14 @@ pub const HttpClient = struct {
     pub fn setDefaultHeader(self: *HttpClient, name: []const u8, value: []const u8) !void {
         const name_copy = try self.allocator.dupe(u8, name);
         const value_copy = try self.allocator.dupe(u8, value);
-        try self.default_headers.put(name_copy, value_copy);
+        
+        // Free old header if it exists
+        if (self.default_headers.fetchPut(name_copy, value_copy)) |old_kv| {
+            self.allocator.free(old_kv.key);
+            self.allocator.free(old_kv.value);
+        } else |err| {
+            return err;
+        }
     }
     
     pub fn setBearerToken(self: *HttpClient, token: []const u8) !void {
@@ -626,6 +656,9 @@ pub const HttpClient = struct {
     }
     
     pub fn setProtocolPreference(self: *HttpClient, preference: []const ProtocolPreference) !void {
+        if (self.protocol_config.preference_order.len > 0) {
+            self.allocator.free(self.protocol_config.preference_order);
+        }
         self.protocol_config.preference_order = try self.allocator.dupe(ProtocolPreference, preference);
     }
     
@@ -634,7 +667,10 @@ pub const HttpClient = struct {
         if (enable) {
             try self.setDefaultHeader("Accept-Encoding", "gzip, br, deflate");
         } else {
-            _ = self.default_headers.remove("Accept-Encoding");
+            if (self.default_headers.fetchRemove("Accept-Encoding")) |kv| {
+                self.allocator.free(kv.key);
+                self.allocator.free(kv.value);
+            }
         }
     }
     
@@ -1281,6 +1317,7 @@ pub const ClaudeClient = struct {
         
         // Set Claude-specific headers
         const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{api_key});
+        defer allocator.free(auth_header);
         try client.http_client.setDefaultHeader("Authorization", auth_header);
         try client.http_client.setDefaultHeader("anthropic-version", "2023-06-01");
         
@@ -1331,6 +1368,7 @@ pub const CopilotClient = struct {
         
         // Set GitHub-specific headers
         const auth_header = try std.fmt.allocPrint(allocator, "token {s}", .{access_token});
+        defer allocator.free(auth_header);
         try client.http_client.setDefaultHeader("Authorization", auth_header);
         try client.http_client.setDefaultHeader("Accept", "application/vnd.github.v3+json");
         

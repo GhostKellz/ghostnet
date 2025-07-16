@@ -307,7 +307,7 @@ pub const QuicConnection = struct {
         try self.performHandshake();
         
         // Start receive loop
-        _ = try self.runtime.spawn(receiveLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
     }
     
     pub fn accept(self: *QuicConnection, socket: udp.UdpSocket, remote_addr: transport.Address) !void {
@@ -322,7 +322,7 @@ pub const QuicConnection = struct {
         try self.performHandshake();
         
         // Start receive loop
-        _ = try self.runtime.spawn(receiveLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
     }
     
     pub fn openStream(self: *QuicConnection, stream_type: QuicStreamType) !*QuicStream {
@@ -626,7 +626,7 @@ pub const QuicServer = struct {
         self.running.store(true, .SeqCst);
         
         // Start accept loop
-        _ = try self.runtime.spawn(acceptLoop, .{self});
+        _ = try self.runtime.spawn(acceptLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *QuicServer) void {

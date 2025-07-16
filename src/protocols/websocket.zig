@@ -331,7 +331,7 @@ pub const WebSocketConnection = struct {
         self.state = .open;
         
         // Start ping/pong loop
-        _ = try self.runtime.spawn(pingPongLoop, .{self});
+        _ = try self.runtime.spawn(pingPongLoop, .{self}, .normal);
     }
     
     fn clientHandshake(self: *WebSocketConnection, url: []const u8) !void {
@@ -762,7 +762,7 @@ pub const WebSocketServer = struct {
         try self.listener.bind(address, transport.TransportOptions{ .allocator = self.allocator });
         
         // Start accept loop
-        _ = try self.runtime.spawn(acceptLoop, .{self});
+        _ = try self.runtime.spawn(acceptLoop, .{self}, .normal);
     }
     
     fn acceptLoop(self: *WebSocketServer) void {
@@ -772,7 +772,7 @@ pub const WebSocketServer = struct {
             switch (tcp_conn) {
                 .ready => |result| {
                     if (result) |conn| {
-                        _ = self.runtime.spawn(handleConnection, .{ self, conn }) catch continue;
+                        _ = self.runtime.spawn(handleConnection, .{ self, conn }, .normal) catch continue;
                     } else |_| {
                         continue;
                     }

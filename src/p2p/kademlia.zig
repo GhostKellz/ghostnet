@@ -610,9 +610,9 @@ pub const KademliaNode = struct {
         self.running.store(true, .SeqCst);
         
         // Start background tasks
-        _ = try self.runtime.spawn(receiveLoop, .{self});
-        _ = try self.runtime.spawn(maintenanceLoop, .{self});
-        _ = try self.runtime.spawn(refreshLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(maintenanceLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(refreshLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *KademliaNode) void {

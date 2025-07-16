@@ -428,10 +428,10 @@ pub const GossipNode = struct {
         self.running.store(true, .SeqCst);
         
         // Start background tasks
-        _ = try self.runtime.spawn(receiveLoop, .{self});
-        _ = try self.runtime.spawn(heartbeatLoop, .{self});
-        _ = try self.runtime.spawn(antiEntropyLoop, .{self});
-        _ = try self.runtime.spawn(maintenanceLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(heartbeatLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(antiEntropyLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(maintenanceLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *GossipNode) void {

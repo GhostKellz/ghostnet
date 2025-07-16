@@ -399,7 +399,7 @@ pub const MDNSResolver = struct {
         self.running.store(true, .SeqCst);
         
         // Start receive loop
-        _ = try self.runtime.spawn(receiveLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
     }
     
     pub fn stop(self: *MDNSResolver) void {

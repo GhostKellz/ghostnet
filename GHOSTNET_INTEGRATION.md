@@ -1,17 +1,18 @@
-# Ghostnet Integration Guide for Zeke AI
+# Ghostnet Integration Guide
 
-This guide demonstrates how to integrate **ghostnet v0.2.0** into your Zeke AI tool (Claude Code + Copilot-like application) for robust HTTP client functionality with AI service integration.
+This guide demonstrates how to integrate **ghostnet v0.2.0** into your project for robust HTTP client functionality with comprehensive networking capabilities. Suitable for AI services, package managers, web scrapers, and any application requiring reliable HTTP communication.
 
 ## Overview
 
-Ghostnet v0.2.0 provides a production-ready HTTP client library specifically designed for AI service integration, featuring:
+Ghostnet v0.2.0 provides a production-ready HTTP client library designed for modern applications, featuring:
 
-- **Unified HttpClient API** with authentication helpers
-- **AI Service Clients** (OpenAI, Claude, GitHub)
-- **Connection Pooling** and middleware system
-- **Retry Logic** and timeout configuration
-- **Rich Error Handling** with detailed context
-- **HTTP/2 Support** with multiplexing
+- **Unified HttpClient API** with comprehensive authentication support
+- **Protocol Negotiation** (HTTP/3, HTTP/2, HTTP/1.1) with smart fallback
+- **Connection Pooling** and advanced middleware system
+- **Rate Limiting** and retry logic with exponential backoff
+- **Streaming Downloads** with progress tracking and resume capability
+- **Rich Error Handling** with detailed context and recovery strategies
+- **Concurrent Operations** with HTTP/2 multiplexing and batch requests
 
 ## Quick Start
 
@@ -53,6 +54,56 @@ pub fn main() !void {
     };
     try client.setRetryConfig(retry_config);
 }
+```
+
+## Common Integration Patterns
+
+### Generic HTTP API Client
+
+```zig
+pub const ApiClient = struct {
+    http_client: *ghostnet.HttpClient,
+    base_url: []const u8,
+    api_key: ?[]const u8,
+    
+    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, base_url: []const u8, api_key: ?[]const u8) !*ApiClient {
+        var client = try allocator.create(ApiClient);
+        client.* = .{
+            .http_client = try ghostnet.HttpClient.init(allocator, runtime),
+            .base_url = try allocator.dupe(u8, base_url),
+            .api_key = if (api_key) |key| try allocator.dupe(u8, key) else null,
+        };
+        
+        // Set API key if provided
+        if (api_key) |key| {
+            try client.http_client.setApiKey("Authorization", try std.fmt.allocPrint(allocator, "Bearer {s}", .{key}));
+        }
+        
+        return client;
+    }
+    
+    pub fn deinit(self: *ApiClient) void {
+        self.http_client.deinit();
+        self.http_client.allocator.free(self.base_url);
+        if (self.api_key) |key| {
+            self.http_client.allocator.free(key);
+        }
+        self.http_client.allocator.destroy(self);
+    }
+    
+    pub fn makeRequest(self: *ApiClient, endpoint: []const u8, method: ghostnet.HttpMethod, body: ?[]const u8) !ghostnet.HttpResponse {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}{s}", .{ self.base_url, endpoint });
+        defer self.http_client.allocator.free(url);
+        
+        return switch (method) {
+            .GET => try self.http_client.get(url),
+            .POST => if (body) |b| try self.http_client.postJson(url, b) else error.MissingBody,
+            .PUT => if (body) |b| try self.http_client.post(url, b, "application/json") else error.MissingBody,
+            .DELETE => try self.http_client.get(url), // Would need actual DELETE method
+            else => error.UnsupportedMethod,
+        };
+    }
+};
 ```
 
 ## AI Service Integration
@@ -236,92 +287,116 @@ const response1 = try http2_client.sendRequest(&request1);
 const response2 = try http2_client.sendRequest(&request2);
 ```
 
-## Zeke AI Integration Patterns
+## Package Manager Integration Patterns
 
-### AI Code Assistant
+### Repository Client
 
 ```zig
-const ZekeAI = struct {
-    openai: *ghostnet.OpenAIClient,
-    claude: *ghostnet.ClaudeClient,
-    github: *ghostnet.GitHubClient,
-    allocator: std.mem.Allocator,
+pub const RepositoryClient = struct {
+    http_client: *ghostnet.HttpClient,
+    base_url: []const u8,
+    rate_limiter: ?ghostnet.RateLimiter,
     
-    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, config: AIConfig) !*ZekeAI {
-        return &ZekeAI{
-            .openai = try ghostnet.OpenAIClient.init(allocator, runtime, config.openai_key),
-            .claude = try ghostnet.ClaudeClient.init(allocator, runtime, config.claude_key),
-            .github = try ghostnet.GitHubClient.init(allocator, runtime, config.github_token),
-            .allocator = allocator,
-        };
-    }
-    
-    pub fn deinit(self: *ZekeAI) void {
-        self.openai.deinit();
-        self.claude.deinit();
-        self.github.deinit();
-    }
-    
-    pub fn generateCode(self: *ZekeAI, prompt: []const u8, language: []const u8) ![]const u8 {
-        // Try OpenAI first
-        const openai_messages = [_]ghostnet.ChatMessage{
-            .{ .role = "system", .content = "You are a code assistant" },
-            .{ .role = "user", .content = prompt },
+    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, base_url: []const u8, rate_limit_rps: ?f64) !*RepositoryClient {
+        var client = try allocator.create(RepositoryClient);
+        client.* = .{
+            .http_client = try ghostnet.HttpClient.init(allocator, runtime),
+            .base_url = try allocator.dupe(u8, base_url),
+            .rate_limiter = if (rate_limit_rps) |rps| ghostnet.RateLimiter.init(rps, 20) else null,
         };
         
-        const openai_response = self.openai.chatCompletion(&openai_messages, "gpt-4") catch |err| {
-            // Fallback to Claude
-            std.debug.print("OpenAI failed, trying Claude: {}\n", .{err});
-            return self.claude.sendMessage(prompt, "claude-3-5-sonnet-20241022");
+        if (rate_limit_rps) |rps| {
+            client.http_client.setRateLimit(rps, 20);
+        }
+        
+        return client;
+    }
+    
+    pub fn deinit(self: *RepositoryClient) void {
+        self.http_client.deinit();
+        self.http_client.allocator.free(self.base_url);
+        self.http_client.allocator.destroy(self);
+    }
+    
+    pub fn downloadPackage(self: *RepositoryClient, package_path: []const u8, dest_path: []const u8, progress_callback: ?*const fn (u64, u64) void) !void {
+        const url = try std.fmt.allocPrint(self.http_client.allocator, "{s}/{s}", .{ self.base_url, package_path });
+        defer self.http_client.allocator.free(url);
+        
+        const options = ghostnet.HttpClient.DownloadOptions{
+            .progress_callback = progress_callback,
+            .chunk_size = 32768,
+            .resume_partial = true,
         };
         
-        return openai_response;
+        try self.http_client.downloadStream(url, dest_path, options);
     }
     
-    pub fn explainCode(self: *ZekeAI, code: []const u8) ![]const u8 {
-        const prompt = try std.fmt.allocPrint(self.allocator, "Explain this code:\\n{s}", .{code});
-        defer self.allocator.free(prompt);
+    pub fn batchGetMetadata(self: *RepositoryClient, package_names: []const []const u8) ![]ghostnet.HttpResponse {
+        var urls = try self.http_client.allocator.alloc([]const u8, package_names.len);
+        defer {
+            for (urls) |url| {
+                self.http_client.allocator.free(url);
+            }
+            self.http_client.allocator.free(urls);
+        }
         
-        const response = try self.claude.sendMessage(prompt, "claude-3-5-sonnet-20241022");
-        return response;
-    }
-    
-    pub fn getCopilotCompletion(self: *ZekeAI, context: []const u8) ![]const u8 {
-        // Get Copilot token first
-        const token_response = try self.github.getCopilotToken();
-        defer token_response.deinit(self.allocator);
+        for (package_names, 0..) |name, i| {
+            urls[i] = try std.fmt.allocPrint(self.http_client.allocator, "{s}/api/packages/{s}", .{ self.base_url, name });
+        }
         
-        // Use token for completion request
-        // Implementation depends on Copilot API
-        return "// Copilot completion here";
+        return try self.http_client.batchGet(urls);
     }
 };
 ```
 
-### Terminal Integration
+### Web Scraper Pattern
 
 ```zig
-// Terminal command handler
-pub fn handleAICommand(command: []const u8, zeke: *ZekeAI) !void {
-    if (std.mem.startsWith(u8, command, "/generate ")) {
-        const prompt = command[10..];
-        const response = try zeke.generateCode(prompt, "zig");
-        defer response.deinit(zeke.allocator);
+pub const WebScraper = struct {
+    http_client: *ghostnet.HttpClient,
+    user_agents: []const []const u8,
+    current_ua_index: usize,
+    
+    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) !*WebScraper {
+        const user_agents = [_][]const u8{
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        };
         
-        std.debug.print("Generated code:\\n{s}\\n", .{response.body orelse "No response"});
-    } else if (std.mem.startsWith(u8, command, "/explain ")) {
-        const code = command[9..];
-        const response = try zeke.explainCode(code);
-        defer response.deinit(zeke.allocator);
+        var client = try allocator.create(WebScraper);
+        client.* = .{
+            .http_client = try ghostnet.HttpClient.init(allocator, runtime),
+            .user_agents = &user_agents,
+            .current_ua_index = 0,
+        };
         
-        std.debug.print("Explanation:\\n{s}\\n", .{response.body orelse "No response"});
-    } else if (std.mem.startsWith(u8, command, "/complete")) {
-        const response = try zeke.getCopilotCompletion("current context");
-        defer response.deinit(zeke.allocator);
+        // Configure for web scraping
+        try client.http_client.setDefaultTimeout(30000);
+        client.http_client.setRateLimit(2.0, 5); // Gentle rate limiting
         
-        std.debug.print("Completion:\\n{s}\\n", .{response.body orelse "No response"});
+        return client;
     }
-}
+    
+    pub fn deinit(self: *WebScraper) void {
+        self.http_client.deinit();
+        self.http_client.allocator.destroy(self);
+    }
+    
+    pub fn scrapeUrl(self: *WebScraper, url: []const u8) !ghostnet.HttpResponse {
+        // Rotate user agents
+        try self.http_client.setDefaultHeader("User-Agent", self.user_agents[self.current_ua_index]);
+        self.current_ua_index = (self.current_ua_index + 1) % self.user_agents.len;
+        
+        // Add common headers
+        try self.http_client.setDefaultHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+        try self.http_client.setDefaultHeader("Accept-Language", "en-US,en;q=0.5");
+        try self.http_client.setDefaultHeader("Accept-Encoding", "gzip, deflate, br");
+        try self.http_client.setDefaultHeader("DNT", "1");
+        
+        return try self.http_client.get(url);
+    }
+};
 ```
 
 ## Configuration

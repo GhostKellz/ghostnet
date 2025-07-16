@@ -3,7 +3,7 @@
 A focused checklist for launching ghostnet – the async-native, next-gen Zig networking framework.
 🚩 MVP Milestones
 
-Async Core Foundation
+Async Core Foundation & etc
 
 TCP/UDP async socket abstraction (zsync-powered)
 

@@ -428,10 +428,10 @@ pub const GossipNode = struct {
         self.running.store(true, .SeqCst);
         
         // Start background tasks
-        _ = try zsync.spawn(self.runtime, receiveLoop, .{self});
-        _ = try zsync.spawn(self.runtime, heartbeatLoop, .{self});
-        _ = try zsync.spawn(self.runtime, antiEntropyLoop, .{self});
-        _ = try zsync.spawn(self.runtime, maintenanceLoop, .{self});
+        _ = try self.runtime.spawn(receiveLoop, .{self});
+        _ = try self.runtime.spawn(heartbeatLoop, .{self});
+        _ = try self.runtime.spawn(antiEntropyLoop, .{self});
+        _ = try self.runtime.spawn(maintenanceLoop, .{self});
     }
     
     pub fn stop(self: *GossipNode) void {

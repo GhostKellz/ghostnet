@@ -40,6 +40,10 @@
             .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
             .hash = "zcrypto-0.8.3-rgQAI8wFDAD5qBCumYyC-gCZpzacQHbApwyvXj-ZCbiG",
         },
+        .zquic = .{
+            .url = "https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz",
+            .hash = "zquic-0.8.0-2rPdsz6KmRN6DaxicN_GS-x9Gaeg3qlFo6cKfa3s1KDO",
+        },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that

@@ -442,10 +442,10 @@ pub const WireGuardTunnel = struct {
         self.running.store(true, .SeqCst);
         
         // Start async tasks
-        _ = try zsync.spawn(self.runtime, udpReceiveLoop, .{self});
-        _ = try zsync.spawn(self.runtime, tunReceiveLoop, .{self});
-        _ = try zsync.spawn(self.runtime, keepaliveLoop, .{self});
-        _ = try zsync.spawn(self.runtime, packetProcessingLoop, .{self});
+        _ = try self.runtime.spawn(udpReceiveLoop, .{self});
+        _ = try self.runtime.spawn(tunReceiveLoop, .{self});
+        _ = try self.runtime.spawn(keepaliveLoop, .{self});
+        _ = try self.runtime.spawn(packetProcessingLoop, .{self});
     }
     
     pub fn stop(self: *WireGuardTunnel) void {

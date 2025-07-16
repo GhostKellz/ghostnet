@@ -72,7 +72,7 @@ pub const ConnectionPool = struct {
         };
         
         if (config.enable_health_checks) {
-            _ = try zsync.spawn(pool.runtime, healthCheckLoop, .{pool});
+            _ = try pool.runtime.spawn(healthCheckLoop, .{pool});
         }
         
         return pool;

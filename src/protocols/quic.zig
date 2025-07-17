@@ -198,8 +198,8 @@ pub const QuicStream = struct {
         return bytes_read;
     }
     
-    pub fn writeAsync(self: *QuicStream, data: []const u8) zsync.Future(transport.TransportError!usize) {
-        return zsync.Future(transport.TransportError!usize).init(self.connection.runtime, struct {
+    pub fn writeAsync(self: *QuicStream, data: []const u8) zsync.Future {
+        return zsync.Future.init(self.connection.runtime, struct {
             stream: *QuicStream,
             data: []const u8,
             
@@ -210,8 +210,8 @@ pub const QuicStream = struct {
         }{ .stream = self, .data = data });
     }
     
-    pub fn readAsync(self: *QuicStream, buffer: []u8) zsync.Future(transport.TransportError!usize) {
-        return zsync.Future(transport.TransportError!usize).init(self.connection.runtime, struct {
+    pub fn readAsync(self: *QuicStream, buffer: []u8) zsync.Future {
+        return zsync.Future.init(self.connection.runtime, struct {
             stream: *QuicStream,
             buffer: []u8,
             
@@ -255,19 +255,19 @@ pub const QuicStream = struct {
         };
     }
     
-    fn readAsyncStream(ptr: *anyopaque, buffer: []u8) zsync.Future(transport.TransportError!usize) {
+    fn readAsyncStream(ptr: *anyopaque, buffer: []u8) zsync.Future {
         const self: *QuicStream = @ptrCast(@alignCast(ptr));
         return self.readAsync(buffer);
     }
     
-    fn writeAsyncStream(ptr: *anyopaque, buffer: []const u8) zsync.Future(transport.TransportError!usize) {
+    fn writeAsyncStream(ptr: *anyopaque, buffer: []const u8) zsync.Future {
         const self: *QuicStream = @ptrCast(@alignCast(ptr));
         return self.writeAsync(buffer);
     }
     
-    fn flushAsyncStream(ptr: *anyopaque) zsync.Future(transport.TransportError!void) {
+    fn flushAsyncStream(ptr: *anyopaque) zsync.Future {
         const self: *QuicStream = @ptrCast(@alignCast(ptr));
-        return zsync.Future(transport.TransportError!void).init(self.connection.runtime, struct {
+        return zsync.Future.init(self.connection.runtime, struct {
             stream: *QuicStream,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!void) {
@@ -277,9 +277,9 @@ pub const QuicStream = struct {
         }{ .stream = self });
     }
     
-    fn closeAsyncStream(ptr: *anyopaque) zsync.Future(void) {
+    fn closeAsyncStream(ptr: *anyopaque) zsync.Future {
         const self: *QuicStream = @ptrCast(@alignCast(ptr));
-        return zsync.Future(void).init(self.connection.runtime, struct {
+        return zsync.Future.init(self.connection.runtime, struct {
             stream: *QuicStream,
             
             pub fn poll(ctx: *@This()) zsync.Poll(void) {
@@ -952,8 +952,8 @@ pub const QuicServer = struct {
         self.running.store(false, .seq_cst);
     }
     
-    pub fn acceptAsync(self: *QuicServer) zsync.Future(transport.TransportError!transport.Connection) {
-        return zsync.Future(transport.TransportError!transport.Connection).init(self.runtime, struct {
+    pub fn acceptAsync(self: *QuicServer) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             server: *QuicServer,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!transport.Connection) {

@@ -110,10 +110,10 @@ pub const TcpListener = struct {
         };
     }
     
-    fn acceptAsync(ptr: *anyopaque) zsync.Future(transport_mod.TransportError!transport_mod.Connection) {
+    fn acceptAsync(ptr: *anyopaque) zsync.Future {
         const self: *TcpListener = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport_mod.TransportError!transport_mod.Connection).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             listener: *TcpListener,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!transport_mod.Connection) {
@@ -251,10 +251,10 @@ pub const TcpConnection = struct {
         };
     }
     
-    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future(transport_mod.TransportError!usize) {
+    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport_mod.TransportError!usize).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             conn: *TcpConnection,
             buf: []u8,
             
@@ -273,10 +273,10 @@ pub const TcpConnection = struct {
         }{ .conn = self, .buf = buffer });
     }
     
-    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future(transport_mod.TransportError!usize) {
+    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport_mod.TransportError!usize).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             conn: *TcpConnection,
             buf: []const u8,
             
@@ -295,10 +295,10 @@ pub const TcpConnection = struct {
         }{ .conn = self, .buf = buffer });
     }
     
-    fn flushAsync(ptr: *anyopaque) zsync.Future(transport_mod.TransportError!void) {
+    fn flushAsync(ptr: *anyopaque) zsync.Future {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport_mod.TransportError!void).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             conn: *TcpConnection,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!void) {
@@ -308,10 +308,10 @@ pub const TcpConnection = struct {
         }{ .conn = self });
     }
     
-    fn closeAsync(ptr: *anyopaque) zsync.Future(void) {
+    fn closeAsync(ptr: *anyopaque) zsync.Future {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(void).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             conn: *TcpConnection,
             
             pub fn poll(ctx: *@This()) zsync.Poll(void) {

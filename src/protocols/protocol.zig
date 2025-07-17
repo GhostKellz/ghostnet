@@ -80,11 +80,11 @@ pub const ProtocolHandler = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
     
-    pub fn handleMessage(self: Self, message: Message) zsync.Future(errors.GhostnetError!void) {
+    pub fn handleMessage(self: Self, message: Message) zsync.Future {
         return self.vtable.handle_message(self.ptr, message);
     }
     
-    pub fn handleConnection(self: Self, connection: transport.Connection) zsync.Future(errors.GhostnetError!void) {
+    pub fn handleConnection(self: Self, connection: transport.Connection) zsync.Future {
         return self.vtable.handle_connection(self.ptr, connection);
     }
     
@@ -104,11 +104,11 @@ pub const ProtocolHandler = struct {
         return self.vtable.configure(self.ptr, config);
     }
     
-    pub fn start(self: Self) zsync.Future(errors.GhostnetError!void) {
+    pub fn start(self: Self) zsync.Future {
         return self.vtable.start(self.ptr);
     }
     
-    pub fn stop(self: Self) zsync.Future(void) {
+    pub fn stop(self: Self) zsync.Future {
         return self.vtable.stop(self.ptr);
     }
     
@@ -149,11 +149,11 @@ pub const ProtocolRegistry = struct {
         ptr: *anyopaque,
         vtable: *const VTable,
         
-        pub fn processInbound(self: MwSelf, message: *Message) zsync.Future(errors.GhostnetError!void) {
+        pub fn processInbound(self: MwSelf, message: *Message) zsync.Future {
             return self.vtable.process_inbound(self.ptr, message);
         }
         
-        pub fn processOutbound(self: MwSelf, message: *Message) zsync.Future(errors.GhostnetError!void) {
+        pub fn processOutbound(self: MwSelf, message: *Message) zsync.Future {
             return self.vtable.process_outbound(self.ptr, message);
         }
         
@@ -279,8 +279,8 @@ pub const ProtocolRegistry = struct {
         return null;
     }
     
-    pub fn dispatchMessage(self: *ProtocolRegistry, protocol_name: []const u8, message: Message) zsync.Future(errors.GhostnetError!void) {
-        return zsync.Future(errors.GhostnetError!void).init(self.runtime, struct {
+    pub fn dispatchMessage(self: *ProtocolRegistry, protocol_name: []const u8, message: Message) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             registry: *ProtocolRegistry,
             proto_name: []const u8,
             msg: Message,
@@ -367,8 +367,8 @@ pub const ProtocolRegistry = struct {
         }
     }
     
-    pub fn startProtocol(self: *ProtocolRegistry, name: []const u8) zsync.Future(errors.GhostnetError!void) {
-        return zsync.Future(errors.GhostnetError!void).init(self.runtime, struct {
+    pub fn startProtocol(self: *ProtocolRegistry, name: []const u8) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             registry: *ProtocolRegistry,
             proto_name: []const u8,
             
@@ -393,8 +393,8 @@ pub const ProtocolRegistry = struct {
         }{ .registry = self, .proto_name = name });
     }
     
-    pub fn stopProtocol(self: *ProtocolRegistry, name: []const u8) zsync.Future(void) {
-        return zsync.Future(void).init(self.runtime, struct {
+    pub fn stopProtocol(self: *ProtocolRegistry, name: []const u8) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             registry: *ProtocolRegistry,
             proto_name: []const u8,
             

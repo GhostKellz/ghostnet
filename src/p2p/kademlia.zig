@@ -527,7 +527,7 @@ pub const KademliaNode = struct {
         message_type: KademliaRpcType,
         target_id: NodeID,
         timestamp: i64,
-        response_future: zsync.Future(?KademliaMessage),
+        response_future: zsync.Future,
         response: ?KademliaMessage,
         completed: std.atomic.Value(bool),
         
@@ -538,7 +538,7 @@ pub const KademliaNode = struct {
                 .message_type = message_type,
                 .target_id = target_id,
                 .timestamp = std.time.timestamp(),
-                .response_future = zsync.Future(?KademliaMessage).init(runtime, struct {
+                .response_future = zsync.Future.init(runtime, struct {
                     request: *PendingRequest,
                     
                     pub fn poll(ctx: *@This()) zsync.Poll(?KademliaMessage) {
@@ -702,7 +702,7 @@ pub const KademliaNode = struct {
             }
             
             // Wait for responses using async futures
-            var response_futures = std.ArrayList(zsync.Future(void)).init(self.allocator);
+            var response_futures = std.ArrayList(zsync.Future).init(self.allocator);
             defer response_futures.deinit();
             
             for (nodes_to_query.items) |node| {
@@ -1131,8 +1131,8 @@ pub const KademliaNode = struct {
         try self.pending_requests.put(request.transaction_id, request);
     }
     
-    fn waitForResponse(self: *KademliaNode, transaction_id: [16]u8, timeout_ms: u32) zsync.Future(?KademliaMessage) {
-        return zsync.Future(?KademliaMessage).init(self.runtime, struct {
+    fn waitForResponse(self: *KademliaNode, transaction_id: [16]u8, timeout_ms: u32) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             node: *KademliaNode,
             transaction_id: [16]u8,
             timeout_ms: u32,

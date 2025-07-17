@@ -918,8 +918,8 @@ pub const HttpClient = struct {
         }
     }
     
-    pub fn downloadStreamAsync(self: *HttpClient, url: []const u8, dest_path: []const u8, options: DownloadOptions) zsync.Future(transport.TransportError!void) {
-        return zsync.Future(transport.TransportError!void).init(self.runtime, struct {
+    pub fn downloadStreamAsync(self: *HttpClient, url: []const u8, dest_path: []const u8, options: DownloadOptions) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             client: *HttpClient,
             url: []const u8,
             dest_path: []const u8,

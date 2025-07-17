@@ -151,8 +151,8 @@ pub const ConnectionPool = struct {
         return error.PoolExhausted;
     }
     
-    pub fn acquireAsync(self: *ConnectionPool, address: transport.Address, options: transport.TransportOptions) zsync.Future(transport.TransportError!transport.Connection) {
-        return zsync.Future(transport.TransportError!transport.Connection).init(self.runtime, struct {
+    pub fn acquireAsync(self: *ConnectionPool, address: transport.Address, options: transport.TransportOptions) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             pool: *ConnectionPool,
             addr: transport.Address,
             opts: transport.TransportOptions,

@@ -147,19 +147,19 @@ pub const Stream = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
-    pub fn readAsync(self: Self, buffer: []u8) zsync.Future(TransportError!usize) {
+    pub fn readAsync(self: Self, buffer: []u8) zsync.Future {
         return self.vtable.read_async(self.ptr, buffer);
     }
 
-    pub fn writeAsync(self: Self, buffer: []const u8) zsync.Future(TransportError!usize) {
+    pub fn writeAsync(self: Self, buffer: []const u8) zsync.Future {
         return self.vtable.write_async(self.ptr, buffer);
     }
 
-    pub fn flushAsync(self: Self) zsync.Future(TransportError!void) {
+    pub fn flushAsync(self: Self) zsync.Future {
         return self.vtable.flush_async(self.ptr);
     }
 
-    pub fn closeAsync(self: Self) zsync.Future(void) {
+    pub fn closeAsync(self: Self) zsync.Future {
         return self.vtable.close_async(self.ptr);
     }
 };
@@ -176,7 +176,7 @@ pub const Listener = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
 
-    pub fn acceptAsync(self: Self) zsync.Future(TransportError!Connection) {
+    pub fn acceptAsync(self: Self) zsync.Future {
         return self.vtable.accept_async(self.ptr);
     }
 

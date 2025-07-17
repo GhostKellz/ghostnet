@@ -93,8 +93,8 @@ pub const UdpSocket = struct {
         };
     }
     
-    pub fn sendToAsync(self: *UdpSocket, data: []const u8, address: transport.Address) zsync.Future(transport.TransportError!usize) {
-        return zsync.Future(transport.TransportError!usize).init(self.runtime, struct {
+    pub fn sendToAsync(self: *UdpSocket, data: []const u8, address: transport.Address) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             data: []const u8,
             addr: transport.Address,
@@ -120,8 +120,8 @@ pub const UdpSocket = struct {
         }{ .socket = self, .data = data, .addr = address });
     }
     
-    pub fn recvFromAsync(self: *UdpSocket, buffer: []u8) zsync.Future(transport.TransportError!UdpPacket) {
-        return zsync.Future(transport.TransportError!UdpPacket).init(self.runtime, struct {
+    pub fn recvFromAsync(self: *UdpSocket, buffer: []u8) zsync.Future {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             buf: []u8,
             
@@ -215,10 +215,10 @@ pub const UdpSocket = struct {
         };
     }
     
-    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future(transport.TransportError!usize) {
+    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport.TransportError!usize).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             buf: []u8,
             
@@ -237,10 +237,10 @@ pub const UdpSocket = struct {
         }{ .socket = self, .buf = buffer });
     }
     
-    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future(transport.TransportError!usize) {
+    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport.TransportError!usize).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             buf: []const u8,
             
@@ -259,10 +259,10 @@ pub const UdpSocket = struct {
         }{ .socket = self, .buf = buffer });
     }
     
-    fn flushAsync(ptr: *anyopaque) zsync.Future(transport.TransportError!void) {
+    fn flushAsync(ptr: *anyopaque) zsync.Future {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(transport.TransportError!void).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             
             pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!void) {
@@ -272,10 +272,10 @@ pub const UdpSocket = struct {
         }{ .socket = self });
     }
     
-    fn closeAsync(ptr: *anyopaque) zsync.Future(void) {
+    fn closeAsync(ptr: *anyopaque) zsync.Future {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future(void).init(self.runtime, struct {
+        return zsync.Future.init(self.runtime, struct {
             socket: *UdpSocket,
             
             pub fn poll(ctx: *@This()) zsync.Poll(void) {

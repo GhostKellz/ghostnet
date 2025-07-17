@@ -195,16 +195,20 @@ pub const TcpConnection = struct {
         conn.state = .connected;
         
         if (options.nodelay) {
-            try conn.socket.setTcpNoDelay(true);
+            const value: c_int = 1;
+            try std.posix.setsockopt(conn.socket.?.handle, std.posix.IPPROTO.TCP, 1, std.mem.asBytes(&value)); // TCP_NODELAY = 1
         }
         if (options.keepalive) {
-            try conn.socket.setKeepAlive(true);
+            const value: c_int = 1;
+            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.KEEPALIVE, std.mem.asBytes(&value));
         }
         if (options.recv_buffer_size) |size| {
-            try conn.socket.setRecvBufferSize(size);
+            const value: c_int = @intCast(size);
+            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVBUF, std.mem.asBytes(&value));
         }
         if (options.send_buffer_size) |size| {
-            try conn.socket.setSendBufferSize(size);
+            const value: c_int = @intCast(size);
+            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDBUF, std.mem.asBytes(&value));
         }
         
         return conn;

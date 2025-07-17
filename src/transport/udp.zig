@@ -11,7 +11,7 @@ pub const UdpPacket = struct {
 pub const UdpSocket = struct {
     allocator: std.mem.Allocator,
     runtime: *zsync.Runtime,
-    socket: ?i32,
+    socket: ?zsync.io.UdpSocket,
     state: transport.ConnectionState,
     options: transport.TransportOptions,
     local_addr: ?transport.Address = null,
@@ -35,21 +35,21 @@ pub const UdpSocket = struct {
             else => return error.InvalidAddress,
         };
         
-        self.socket = try zsync.net.UdpSocket.bind(addr);
+        self.socket = try zsync.io.UdpSocket.bind(addr);
         self.state = .connected;
         self.local_addr = address;
         
         if (options.reuse_address) {
-            try self.socket.setReuseAddress(true);
+            try self.socket.?.setReuseAddress(true);
         }
         if (options.reuse_port) {
-            try self.socket.setReusePort(true);
+            try self.socket.?.setReusePort(true);
         }
         if (options.recv_buffer_size) |size| {
-            try self.socket.setRecvBufferSize(size);
+            try self.socket.?.setRecvBufferSize(size);
         }
         if (options.send_buffer_size) |size| {
-            try self.socket.setSendBufferSize(size);
+            try self.socket.?.setSendBufferSize(size);
         }
     }
     
@@ -60,7 +60,7 @@ pub const UdpSocket = struct {
             else => return error.InvalidAddress,
         };
         
-        try self.socket.connect(addr);
+        try self.socket.?.connect(addr);
         self.state = .connected;
     }
     
@@ -71,13 +71,15 @@ pub const UdpSocket = struct {
             else => return error.InvalidAddress,
         };
         
-        return self.socket.sendTo(data, addr) catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        return socket.sendTo(data, addr) catch |err| {
             return errors.mapSystemError(err);
         };
     }
     
     pub fn recvFrom(self: *UdpSocket, buffer: []u8) !UdpPacket {
-        const result = self.socket.recvFrom(buffer) catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        const result = socket.recvFrom(buffer) catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -166,7 +168,8 @@ pub const UdpSocket = struct {
             return addr;
         }
         
-        const addr = self.socket.getLocalAddress() catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        const addr = socket.getLocalAddress() catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -206,14 +209,16 @@ pub const UdpSocket = struct {
     
     fn read(ptr: *anyopaque, buffer: []u8) transport.TransportError!usize {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
-        return self.socket.recv(buffer) catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        return socket.recv(buffer) catch |err| {
             return errors.mapSystemError(err);
         };
     }
     
     fn write(ptr: *anyopaque, buffer: []const u8) transport.TransportError!usize {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
-        return self.socket.send(buffer) catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        return socket.send(buffer) catch |err| {
             return errors.mapSystemError(err);
         };
     }
@@ -301,7 +306,8 @@ pub const UdpSocket = struct {
     fn remoteAddressConnection(ptr: *anyopaque) transport.TransportError!transport.Address {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
-        const addr = self.socket.getRemoteAddress() catch |err| {
+        const socket = self.socket orelse return error.SocketNotBound;
+        const addr = socket.getRemoteAddress() catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -320,14 +326,16 @@ pub const UdpSocket = struct {
     fn setTimeout(ptr: *anyopaque, read_timeout: ?u64, write_timeout: ?u64) transport.TransportError!void {
         const self: *UdpSocket = @ptrCast(@alignCast(ptr));
         
+        const socket = self.socket orelse return error.SocketNotBound;
+        
         if (read_timeout) |timeout| {
-            self.socket.setReadTimeout(timeout) catch |err| {
+            socket.setReadTimeout(timeout) catch |err| {
                 return errors.mapSystemError(err);
             };
         }
         
         if (write_timeout) |timeout| {
-            self.socket.setWriteTimeout(timeout) catch |err| {
+            socket.setWriteTimeout(timeout) catch |err| {
                 return errors.mapSystemError(err);
             };
         }

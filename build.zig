@@ -170,6 +170,21 @@ pub fn build(b: *std.Build) void {
     
     const run_zquic_test = b.addRunArtifact(zquic_test);
 
+    // Create TCP/UDP fixes test
+    const tcp_udp_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test_tcp_udp_fixes.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_tcp_udp_test = b.addRunArtifact(tcp_udp_test);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -177,6 +192,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_zquic_test.step);
+    test_step.dependOn(&run_tcp_udp_test.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

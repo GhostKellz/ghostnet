@@ -195,7 +195,7 @@ pub const TcpConnection = struct {
         conn.state = .connected;
         
         if (options.nodelay) {
-            try conn.socket.setNoDelay(true);
+            try conn.socket.setTcpNoDelay(true);
         }
         if (options.keepalive) {
             try conn.socket.setKeepAlive(true);

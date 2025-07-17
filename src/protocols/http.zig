@@ -952,7 +952,11 @@ pub const HttpClient = struct {
         const host = uri.host orelse return error.MissingHost;
         
         // Protocol selection - HTTP/3 first!
-        var selected_protocol = self.selectProtocol(host);
+        const host_str = switch (host) {
+            .percent_encoded => |h| h,
+            .raw => |h| h,
+        };
+        var selected_protocol = self.selectProtocol(host_str);
         var attempt: u32 = 0;
         var last_error: ?anyerror = null;
         

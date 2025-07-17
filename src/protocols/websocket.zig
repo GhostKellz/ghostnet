@@ -217,9 +217,8 @@ pub const WebSocketMessage = struct {
     pub fn close(allocator: std.mem.Allocator, code: WebSocketCloseCode, reason: []const u8) !WebSocketMessage {
         var payload = std.ArrayList(u8).init(allocator);
         
-        const code_bytes = std.mem.toBytes(@intFromEnum(code));
-        try payload.append(code_bytes[0]);
-        try payload.append(code_bytes[1]);
+        const code_value = @intFromEnum(code);
+        try payload.writer().writeInt(u16, code_value, .big);
         try payload.appendSlice(reason);
         
         return WebSocketMessage{
@@ -628,7 +627,7 @@ pub const WebSocketConnection = struct {
         if (self.state == .open) {
             self.state = .closing;
             
-            const close_message = try WebSocketMessage.close(self.allocator, code, reason);
+            var close_message = try WebSocketMessage.close(self.allocator, code, reason);
             defer close_message.deinit(self.allocator);
             
             try self.sendMessage(close_message);
@@ -832,3 +831,28 @@ pub const WebSocketServer = struct {
         ws_conn.deinit();
     }
 };
+
+test "WebSocketMessage close functionality" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    // Test creating a close message
+    var close_message = try WebSocketMessage.close(allocator, .normal_closure, "Normal closure");
+    defer close_message.deinit(allocator);
+    
+    // Verify the opcode is correct for close
+    try testing.expectEqual(WebSocketOpcode.close, close_message.opcode);
+    
+    // Verify the payload contains the close code and reason
+    try testing.expect(close_message.payload.len >= 2);
+    
+    // The first two bytes should be the close code (1000 in network byte order)
+    const close_code = std.mem.readInt(u16, close_message.payload[0..2], .big);
+    try testing.expectEqual(@as(u16, 1000), close_code);
+    
+    // The rest should be the reason string
+    if (close_message.payload.len > 2) {
+        const reason = close_message.payload[2..];
+        try testing.expectEqualStrings("Normal closure", reason);
+    }
+}

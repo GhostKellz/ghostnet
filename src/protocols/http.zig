@@ -307,15 +307,17 @@ pub const HttpRequest = struct {
     }
     
     pub fn setHeader(self: *HttpRequest, allocator: std.mem.Allocator, name: []const u8, value: []const u8) !void {
-        const name_copy = try allocator.dupe(u8, name);
         const value_copy = try allocator.dupe(u8, value);
         
-        // Free old header if it exists
-        if (self.headers.fetchPut(name_copy, value_copy)) |old_kv| {
-            allocator.free(old_kv.key);
-            allocator.free(old_kv.value);
-        } else |err| {
-            return err;
+        // Check if header already exists
+        if (self.headers.getPtr(name)) |existing_value| {
+            // Free old value and update with new value
+            allocator.free(existing_value.*);
+            existing_value.* = value_copy;
+        } else {
+            // Create new header entry
+            const name_copy = try allocator.dupe(u8, name);
+            try self.headers.put(name_copy, value_copy);
         }
     }
     
@@ -1484,3 +1486,26 @@ pub const GitHubClient = struct {
         return try self.http_client.get(url);
     }
 };
+
+test "HttpRequest setHeader functionality" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    
+    var request = try HttpRequest.init(allocator, .GET, "/test");
+    defer request.deinit(allocator);
+    
+    // Test setting a header
+    try request.setHeader(allocator, "Content-Type", "application/json");
+    
+    // Test that the header was set
+    const content_type = request.headers.get("Content-Type");
+    try testing.expect(content_type != null);
+    try testing.expectEqualStrings("application/json", content_type.?);
+    
+    // Test overwriting a header (this should free the old value)
+    try request.setHeader(allocator, "Content-Type", "text/plain");
+    
+    const new_content_type = request.headers.get("Content-Type");
+    try testing.expect(new_content_type != null);
+    try testing.expectEqualStrings("text/plain", new_content_type.?);
+}

@@ -380,7 +380,8 @@ pub const QuicConnection = struct {
         self.state = .handshaking;
         
         // Initialize QUIC connection
-        self.quic_conn = try zquic.Connection.init(self.allocator, .client, .{});
+        const params = zquic.Connection.ConnectionParams{};
+        self.quic_conn = try zquic.Connection.init(self.allocator, .client, params);
         
         // Start handshake
         try self.performHandshake();
@@ -395,7 +396,8 @@ pub const QuicConnection = struct {
         self.state = .handshaking;
         
         // Initialize QUIC connection for server
-        self.quic_conn = try zquic.Connection.init(self.allocator, .server, .{});
+        const params = zquic.Connection.ConnectionParams{};
+        self.quic_conn = try zquic.Connection.init(self.allocator, .server, params);
         
         // Start handshake
         try self.performHandshake();

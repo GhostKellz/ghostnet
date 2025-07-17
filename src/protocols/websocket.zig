@@ -471,7 +471,7 @@ pub const WebSocketConnection = struct {
         const frame_data = try frame.serialize(self.allocator);
         defer self.allocator.free(frame_data);
         
-        _ = try self.stream.writeAsync(frame_data);
+        _ = self.stream.writeAsync(frame_data);
         
         _ = self.bytes_sent.fetchAdd(frame_data.len, .seq_cst);
         _ = self.messages_sent.fetchAdd(1, .seq_cst);

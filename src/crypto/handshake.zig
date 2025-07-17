@@ -398,9 +398,8 @@ pub const NoiseHandshake = struct {
         try zcrypto.hkdf.extract(&temp_key, &self.chaining_key, &[_]u8{});
         try zcrypto.hkdf.expand(&cipher_key, &temp_key, "noise-cipher", &[_]u8{});
         
-        // Generate nonce (simplified - would use counter in real implementation)
-        var nonce: [12]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        // Generate secure nonce using counter to prevent reuse
+        const nonce = self.generateNonce();
         
         // Encrypt with ChaCha20-Poly1305
         const ciphertext = try self.allocator.alloc(u8, plaintext.len + 16); // +16 for auth tag
@@ -433,9 +432,8 @@ pub const NoiseHandshake = struct {
         try zcrypto.hkdf.extract(&temp_key, &self.chaining_key, &[_]u8{});
         try zcrypto.hkdf.expand(&cipher_key, &temp_key, "noise-cipher", &[_]u8{});
         
-        // Generate nonce (simplified - would use counter in real implementation)
-        var nonce: [12]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        // Generate secure nonce using counter to prevent reuse
+        const nonce = self.generateNonce();
         
         // Decrypt with ChaCha20-Poly1305
         const plaintext = try self.allocator.alloc(u8, ciphertext.len - 16); // -16 for auth tag
@@ -966,13 +964,23 @@ pub const HandshakeManager = struct {
     allocator: std.mem.Allocator,
     runtime: *zsync.Runtime,
     session_cache: SessionCache,
+    nonce_counter: std.atomic.Value(u64),
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) HandshakeManager {
         return .{
             .allocator = allocator,
             .runtime = runtime,
             .session_cache = SessionCache.init(allocator),
+            .nonce_counter = std.atomic.Value(u64).init(0),
         };
+    }
+    
+    pub fn generateNonce(self: *HandshakeManager) [12]u8 {
+        const count = self.nonce_counter.fetchAdd(1, .seq_cst);
+        var nonce = [_]u8{0} ** 12;
+        std.mem.writeIntLittle(u64, nonce[0..8], count);
+        std.crypto.random.bytes(nonce[8..12]); // Add entropy to high bits
+        return nonce;
     }
     
     pub fn deinit(self: *HandshakeManager) void {

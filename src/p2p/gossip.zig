@@ -748,7 +748,8 @@ pub const GossipNode = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    const delay_future = self.runtime.sleep(std.time.ns_per_ms);
+                    _ = try self.runtime.await(delay_future);
                     continue;
                 },
             }
@@ -974,9 +975,48 @@ pub const GossipNode = struct {
     }
     
     fn handleSyncRequest(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
-        _ = message;
-        _ = sender_addr;
-        // Handle sync request - similar to anti-entropy but more targeted
+        // Extract topic from sync request
+        const topic_name = message.topic;
+        
+        // Find the requesting peer
+        var peer_opt: ?*GossipPeer = null;
+        var peer_iter = self.peers.iterator();
+        while (peer_iter.next()) |entry| {
+            if (std.mem.eql(u8, &entry.value_ptr.address.host, &sender_addr.host) and 
+                entry.value_ptr.address.port == sender_addr.port) {
+                peer_opt = entry.value_ptr;
+                break;
+            }
+        }
+        
+        if (peer_opt) |peer| {
+            if (self.topics.get(topic_name)) |topic| {
+                // Send recent messages from this topic (last 5 minutes)
+                const cutoff_time = std.time.timestamp() - 300;
+                const recent_messages = try topic.getRecentMessages(self.allocator, cutoff_time);
+                defer self.allocator.free(recent_messages);
+                
+                for (recent_messages) |recent_msg| {
+                    // Create sync response message
+                    var sync_msg = try GossipMessage.init(
+                        self.allocator,
+                        .sync_response,
+                        recent_msg.sender_id,
+                        recent_msg.topic,
+                        recent_msg.payload
+                    );
+                    defer sync_msg.deinit(self.allocator);
+                    
+                    sync_msg.sequence_number = recent_msg.sequence_number;
+                    sync_msg.timestamp = recent_msg.timestamp;
+                    
+                    try self.sendMessageToPeer(&sync_msg, peer);
+                }
+            }
+        }
+        
+        // Update sync request statistics
+        _ = self.stats.messages_received.fetchAdd(1, .seq_cst);
     }
     
     fn handleSyncResponse(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
@@ -989,7 +1029,9 @@ pub const GossipNode = struct {
     
     fn heartbeatLoop(self: *GossipNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(self.config.heartbeat_interval * 1000000); // Convert to nanoseconds
+            const delay_ns = self.config.heartbeat_interval * std.time.ns_per_ms;
+            const delay_future = self.runtime.sleep(delay_ns);
+            _ = self.runtime.await(delay_future) catch continue;
             
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -1113,7 +1155,9 @@ pub const GossipNode = struct {
     
     fn antiEntropyLoop(self: *GossipNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(self.config.anti_entropy_interval * 1000000); // Convert to nanoseconds
+            const delay_ns = self.config.anti_entropy_interval * std.time.ns_per_ms;
+            const delay_future = self.runtime.sleep(delay_ns);
+            _ = self.runtime.await(delay_future) catch continue;
             
             // Perform anti-entropy with random peers
             self.performAntiEntropy() catch {};
@@ -1122,7 +1166,8 @@ pub const GossipNode = struct {
     
     fn peerExchangeLoop(self: *GossipNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(30000000000); // 30 seconds
+            const delay_future = self.runtime.sleep(30 * std.time.ns_per_s);
+            _ = self.runtime.await(delay_future) catch continue;
             
             // Initiate peer exchange
             self.initiatePeerExchange() catch {};
@@ -1153,7 +1198,8 @@ pub const GossipNode = struct {
     
     fn maintenanceLoop(self: *GossipNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(10000000000); // 10 seconds
+            const delay_future = self.runtime.sleep(10 * std.time.ns_per_s);
+            _ = self.runtime.await(delay_future) catch continue;
             
             self.mutex.lock();
             defer self.mutex.unlock();

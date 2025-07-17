@@ -168,6 +168,8 @@ pub const WireGuardConfig = struct {
     reject_after_time: u64 = 180,
     cookie_timeout: u32 = 120,
     enable_roaming: bool = true,
+    cookie_secret: [32]u8,
+    mac_key: [32]u8,
 };
 
 pub fn ArrayHashContext(comptime T: type) type {
@@ -195,6 +197,10 @@ pub const WireGuardTunnel = struct {
     routing_table: RoutingTable,
     packet_queue: PacketQueue,
     stats: TunnelStats,
+    rate_limiter: RateLimiter,
+    cookie_jar: CookieJar,
+    send_nonce_counter: std.atomic.Value(u64),
+    recv_nonce_counter: std.atomic.Value(u64),
     mutex: std.Thread.Mutex,
     running: std.atomic.Value(bool),
     
@@ -497,6 +503,8 @@ pub const WireGuardTunnel = struct {
             .stats = TunnelStats.init(),
             .rate_limiter = RateLimiter.init(allocator),
             .cookie_jar = CookieJar.init(allocator),
+            .send_nonce_counter = std.atomic.Value(u64).init(0),
+            .recv_nonce_counter = std.atomic.Value(u64).init(0),
             .mutex = .{},
             .running = std.atomic.Value(bool).init(false),
         };
@@ -879,26 +887,44 @@ pub const WireGuardTunnel = struct {
     
     fn encryptTransportData(self: *WireGuardTunnel, data: []const u8, key: [32]u8) ![]u8 {
         const encrypted = try self.allocator.alloc(u8, data.len + 16);
-        try zcrypto.chacha20poly1305.encrypt(encrypted, data, &key, &[_]u8{0} ** 12);
+        
+        // Generate secure nonce using atomic counter
+        const nonce_value = self.send_nonce_counter.fetchAdd(1, .seq_cst);
+        var nonce: [12]u8 = [_]u8{0} ** 12;
+        std.mem.writeIntLittle(u64, nonce[0..8], nonce_value);
+        
+        try zcrypto.chacha20poly1305.encrypt(encrypted, data, &key, &nonce);
         return encrypted;
     }
     
-    fn decryptTransportData(self: *WireGuardTunnel, encrypted: []const u8, key: [32]u8) ![]u8 {
+    fn decryptTransportData(self: *WireGuardTunnel, encrypted: []const u8, key: [32]u8, expected_nonce: u64) ![]u8 {
         const decrypted = try self.allocator.alloc(u8, encrypted.len - 16);
-        try zcrypto.chacha20poly1305.decrypt(decrypted, encrypted, &key, &[_]u8{0} ** 12);
+        
+        // Validate nonce for replay protection
+        const current_nonce = self.recv_nonce_counter.load(.seq_cst);
+        if (expected_nonce <= current_nonce) {
+            return error.ReplayAttack;
+        }
+        
+        // Update receive nonce counter
+        _ = self.recv_nonce_counter.compareAndSwap(current_nonce, expected_nonce, .seq_cst, .seq_cst);
+        
+        // Reconstruct nonce from value
+        var nonce: [12]u8 = [_]u8{0} ** 12;
+        std.mem.writeIntLittle(u64, nonce[0..8], expected_nonce);
+        
+        try zcrypto.chacha20poly1305.decrypt(decrypted, encrypted, &key, &nonce);
         return decrypted;
     }
     
     fn computeMAC1(self: *WireGuardTunnel, output: *[16]u8, input: []const u8) !void {
-        _ = self;
-        // BLAKE2s MAC computation
-        try zcrypto.blake2s.mac(output, input, &[_]u8{0} ** 32);
+        // BLAKE2s MAC computation using proper MAC key
+        try zcrypto.blake2s.mac(output, input, &self.config.mac_key);
     }
     
     fn validateMAC1(self: *WireGuardTunnel, mac: *const [16]u8, input: []const u8) !bool {
-        _ = self;
         var computed_mac: [16]u8 = undefined;
-        try zcrypto.blake2s.mac(&computed_mac, input, &[_]u8{0} ** 32);
+        try zcrypto.blake2s.mac(&computed_mac, input, &self.config.mac_key);
         return std.mem.eql(u8, mac, &computed_mac);
     }
     
@@ -1139,14 +1165,24 @@ pub const WireGuardTunnel = struct {
     }
     
     fn validateMAC2(self: *WireGuardTunnel, mac: *const [16]u8, data: []const u8, sender_addr: transport.Address) !bool {
-        _ = self;
-        _ = mac;
-        _ = data;
-        _ = sender_addr;
+        // Get cookie for this address if one exists
+        if (self.cookie_jar.cookies.get(sender_addr)) |stored_cookie| {
+            // Cookie is valid if within timeout
+            const age = std.time.timestamp() - stored_cookie.timestamp;
+            if (age >= self.config.cookie_timeout) {
+                return false; // Cookie expired
+            }
+            
+            // Compute expected MAC2 using stored cookie
+            var expected_mac: [16]u8 = undefined;
+            try zcrypto.blake2s.mac(&expected_mac, data, &stored_cookie.value);
+            
+            // Compare with provided MAC2
+            return std.mem.eql(u8, mac, &expected_mac);
+        }
         
-        // Cookie-based MAC validation (simplified)
-        // In real implementation, would use stored cookie for this endpoint
-        return true;
+        // No cookie stored for this address - require cookie challenge
+        return false;
     }
     
     fn sendKeepalive(self: *WireGuardTunnel, peer: *Peer) !void {

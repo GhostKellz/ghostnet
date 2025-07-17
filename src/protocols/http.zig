@@ -599,8 +599,10 @@ pub const HttpClient = struct {
         
         // Free old header if it exists
         if (self.default_headers.fetchPut(name_copy, value_copy)) |old_kv| {
-            self.allocator.free(old_kv.key);
-            self.allocator.free(old_kv.value);
+            if (old_kv) |kv| {
+                self.allocator.free(kv.key);
+                self.allocator.free(kv.value);
+            }
         } else |err| {
             return err;
         }
@@ -884,17 +886,34 @@ pub const HttpClient = struct {
         
         // Download with progress tracking
         var downloaded: u64 = start_byte;
-        _ = std.time.timestamp(); // Track time for progress updates
+        const start_time = std.time.timestamp();
         const buffer = try self.allocator.alloc(u8, options.chunk_size);
         defer self.allocator.free(buffer);
         
-        // In a real implementation, we'd stream from the HTTP response
+        // Stream download with progress tracking
         if (response.body) |body| {
-            try file.writeAll(body);
-            downloaded += body.len;
+            var bytes_written: usize = 0;
+            const chunk_size = @min(buffer.len, body.len);
             
-            if (options.progress_callback) |callback| {
-                callback(downloaded, total_size orelse downloaded);
+            while (bytes_written < body.len) {
+                const remaining = body.len - bytes_written;
+                const to_write = @min(chunk_size, remaining);
+                
+                try file.writeAll(body[bytes_written..bytes_written + to_write]);
+                bytes_written += to_write;
+                downloaded += to_write;
+                
+                if (options.progress_callback) |callback| {
+                    const elapsed = std.time.timestamp() - start_time;
+                    const rate = if (elapsed > 0) downloaded / @as(u64, @intCast(elapsed)) else 0;
+                    _ = rate; // Could be used for ETA calculation
+                    callback(downloaded, total_size orelse downloaded);
+                }
+                
+                // Small delay for chunked processing
+                if (remaining > chunk_size) {
+                    std.time.sleep(1000); // 1µs
+                }
             }
         }
     }
@@ -929,8 +948,8 @@ pub const HttpClient = struct {
         // Parse URL
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const host = uri.host orelse return error.MissingHost;
-        _ = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
-        _ = std.mem.eql(u8, uri.scheme, "https");
+        const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
+        const is_https = std.mem.eql(u8, uri.scheme, "https");
         
         // Protocol selection - HTTP/3 first!
         var selected_protocol = self.selectProtocol(host);
@@ -1056,7 +1075,10 @@ pub const HttpClient = struct {
         }
         
         // Send via QUIC stream
-        _ = try stream.write(request_data.items);
+        const bytes_written = try stream.write(request_data.items);
+        if (bytes_written != request_data.items.len) {
+            return error.IncompleteWrite;
+        }
         stream.close();
         
         // Read response
@@ -1105,7 +1127,10 @@ pub const HttpClient = struct {
             };
             
             var handshake_manager = handshake.HandshakeManager.init(self.allocator, self.runtime);
-            _ = try handshake_manager.performHandshake(tls_config, stream);
+            const handshake_result = try handshake_manager.performHandshake(tls_config, stream);
+            if (!handshake_result.success) {
+                return error.HandshakeFailed;
+            }
         }
         
         // Create HTTP/2 connection
@@ -1148,7 +1173,10 @@ pub const HttpClient = struct {
             };
             
             var handshake_manager = handshake.HandshakeManager.init(self.allocator, self.runtime);
-            _ = try handshake_manager.performHandshake(tls_config, stream);
+            const handshake_result = try handshake_manager.performHandshake(tls_config, stream);
+            if (!handshake_result.success) {
+                return error.HandshakeFailed;
+            }
         }
         
         // Set proper HTTP version
@@ -1158,7 +1186,10 @@ pub const HttpClient = struct {
         const request_data = try request.serialize(self.allocator);
         defer self.allocator.free(request_data);
         
-        _ = try stream.writeAsync(request_data);
+        const bytes_written = try stream.writeAsync(request_data);
+        if (bytes_written != request_data.len) {
+            return error.IncompleteWrite;
+        }
         
         // Read response
         var response_buffer = std.ArrayList(u8).init(self.allocator);

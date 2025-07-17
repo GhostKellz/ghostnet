@@ -6,6 +6,80 @@ const udp = @import("../transport/udp.zig");
 const errors = @import("../errors/errors.zig");
 const protocol = @import("protocol.zig");
 
+// High-performance ring buffer for zero-copy stream operations
+pub const RingBuffer = struct {
+    buffer: []u8,
+    read_pos: usize,
+    write_pos: usize,
+    size: usize,
+    allocator: std.mem.Allocator,
+    
+    pub fn init(allocator: std.mem.Allocator, capacity: usize) !RingBuffer {
+        const buffer = try allocator.alloc(u8, capacity);
+        return RingBuffer{
+            .buffer = buffer,
+            .read_pos = 0,
+            .write_pos = 0,
+            .size = 0,
+            .allocator = allocator,
+        };
+    }
+    
+    pub fn deinit(self: *RingBuffer) void {
+        self.allocator.free(self.buffer);
+    }
+    
+    pub fn available(self: *const RingBuffer) usize {
+        return self.size;
+    }
+    
+    pub fn capacity(self: *const RingBuffer) usize {
+        return self.buffer.len;
+    }
+    
+    pub fn freeSpace(self: *const RingBuffer) usize {
+        return self.buffer.len - self.size;
+    }
+    
+    pub fn read(self: *RingBuffer, dest: []u8) usize {
+        const bytes_to_read = std.math.min(dest.len, self.size);
+        if (bytes_to_read == 0) return 0;
+        
+        // Handle wrap-around case
+        if (self.read_pos + bytes_to_read <= self.buffer.len) {
+            std.mem.copy(u8, dest[0..bytes_to_read], self.buffer[self.read_pos..self.read_pos + bytes_to_read]);
+        } else {
+            const first_chunk = self.buffer.len - self.read_pos;
+            const second_chunk = bytes_to_read - first_chunk;
+            std.mem.copy(u8, dest[0..first_chunk], self.buffer[self.read_pos..]);
+            std.mem.copy(u8, dest[first_chunk..bytes_to_read], self.buffer[0..second_chunk]);
+        }
+        
+        self.read_pos = (self.read_pos + bytes_to_read) % self.buffer.len;
+        self.size -= bytes_to_read;
+        return bytes_to_read;
+    }
+    
+    pub fn write(self: *RingBuffer, src: []const u8) usize {
+        const bytes_to_write = std.math.min(src.len, self.freeSpace());
+        if (bytes_to_write == 0) return 0;
+        
+        // Handle wrap-around case
+        if (self.write_pos + bytes_to_write <= self.buffer.len) {
+            std.mem.copy(u8, self.buffer[self.write_pos..self.write_pos + bytes_to_write], src[0..bytes_to_write]);
+        } else {
+            const first_chunk = self.buffer.len - self.write_pos;
+            const second_chunk = bytes_to_write - first_chunk;
+            std.mem.copy(u8, self.buffer[self.write_pos..], src[0..first_chunk]);
+            std.mem.copy(u8, self.buffer[0..second_chunk], src[first_chunk..bytes_to_write]);
+        }
+        
+        self.write_pos = (self.write_pos + bytes_to_write) % self.buffer.len;
+        self.size += bytes_to_write;
+        return bytes_to_write;
+    }
+};
+
 pub const QuicConfig = struct {
     max_streams: u32 = 1000,
     max_stream_data: u64 = 1024 * 1024, // 1MB
@@ -43,8 +117,8 @@ pub const QuicStream = struct {
     stream_type: QuicStreamType,
     state: QuicStreamState,
     connection: *QuicConnection,
-    send_buffer: std.ArrayList(u8),
-    recv_buffer: std.ArrayList(u8),
+    send_buffer: RingBuffer,
+    recv_buffer: RingBuffer,
     send_offset: u64,
     recv_offset: u64,
     max_send_data: u64,
@@ -63,8 +137,8 @@ pub const QuicStream = struct {
             .stream_type = stream_type,
             .state = .idle,
             .connection = connection,
-            .send_buffer = std.ArrayList(u8).init(allocator),
-            .recv_buffer = std.ArrayList(u8).init(allocator),
+            .send_buffer = try RingBuffer.init(allocator, @as(usize, @intCast(connection.config.max_stream_data))),
+            .recv_buffer = try RingBuffer.init(allocator, @as(usize, @intCast(connection.config.max_stream_data))),
             .send_offset = 0,
             .recv_offset = 0,
             .max_send_data = connection.config.max_stream_data,
@@ -111,23 +185,17 @@ pub const QuicStream = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         
-        if (self.recv_buffer.items.len == 0) {
+        if (self.recv_buffer.available() == 0) {
             if (self.recv_fin or self.state == .closed or self.state == .reset) {
                 return 0;
             }
             return error.WouldBlock;
         }
         
-        const bytes_to_read = std.math.min(buffer.len, self.recv_buffer.items.len);
-        std.mem.copy(u8, buffer, self.recv_buffer.items[0..bytes_to_read]);
+        const bytes_read = self.recv_buffer.read(buffer);
+        self.recv_offset += bytes_read;
         
-        // Remove read bytes from buffer
-        std.mem.copy(u8, self.recv_buffer.items, self.recv_buffer.items[bytes_to_read..]);
-        self.recv_buffer.shrinkRetainingCapacity(self.recv_buffer.items.len - bytes_to_read);
-        
-        self.recv_offset += bytes_to_read;
-        
-        return bytes_to_read;
+        return bytes_read;
     }
     
     pub fn writeAsync(self: *QuicStream, data: []const u8) zsync.Future(transport.TransportError!usize) {

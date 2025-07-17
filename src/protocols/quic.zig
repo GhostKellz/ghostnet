@@ -381,7 +381,7 @@ pub const QuicConnection = struct {
         
         // Initialize QUIC connection
         const params = zquic.Connection.ConnectionParams{};
-        self.quic_conn = try zquic.Connection.init(self.allocator, .client, params);
+        self.quic_conn = try zquic.Connection.Connection.init(self.allocator, .client, params);
         
         // Start handshake
         try self.performHandshake();

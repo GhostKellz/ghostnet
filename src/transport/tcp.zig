@@ -191,7 +191,7 @@ pub const TcpConnection = struct {
             .options = options,
         };
         
-        conn.socket = try zsync.TcpStream.connect(addr);
+        conn.socket = try std.net.tcpConnectToAddress(addr);
         conn.state = .connected;
         
         if (options.nodelay) {

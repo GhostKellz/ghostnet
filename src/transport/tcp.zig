@@ -5,12 +5,12 @@ const errors = @import("../errors/errors.zig");
 
 pub const TcpTransport = struct {
     allocator: std.mem.Allocator,
-    io: zsync.ThreadPoolIo,
+    io: zsync.BlockingIo,
     
     pub fn init(allocator: std.mem.Allocator) !TcpTransport {
         return .{
             .allocator = allocator,
-            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .io = zsync.BlockingIo.init(allocator),
         };
     }
     
@@ -69,14 +69,14 @@ pub const TcpTransport = struct {
 
 pub const TcpListener = struct {
     allocator: std.mem.Allocator,
-    io: zsync.ThreadPoolIo,
+    io: zsync.BlockingIo,
     tcp_listener: ?zsync.TcpListener,
     options: transport_mod.TransportOptions,
     
     pub fn init(allocator: std.mem.Allocator) !TcpListener {
         return .{
             .allocator = allocator,
-            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .io = zsync.BlockingIo.init(allocator),
             .tcp_listener = null,
             .options = undefined,
         };
@@ -171,7 +171,7 @@ pub const TcpListener = struct {
 
 pub const TcpConnection = struct {
     allocator: std.mem.Allocator,
-    io: zsync.ThreadPoolIo,
+    io: zsync.BlockingIo,
     tcp_stream: zsync.TcpStream,
     state: transport_mod.ConnectionState,
     options: transport_mod.TransportOptions,
@@ -191,7 +191,7 @@ pub const TcpConnection = struct {
         
         conn.* = .{
             .allocator = allocator,
-            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .io = zsync.BlockingIo.init(allocator),
             .tcp_stream = tcp_stream,
             .state = .connected,
             .options = options,

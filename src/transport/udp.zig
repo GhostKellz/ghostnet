@@ -10,7 +10,7 @@ pub const UdpPacket = struct {
 
 pub const UdpSocket = struct {
     allocator: std.mem.Allocator,
-    io: zsync.ThreadPoolIo,
+    io: zsync.BlockingIo,
     udp_socket: ?zsync.UdpSocket,
     state: transport.ConnectionState,
     options: transport.TransportOptions,
@@ -19,7 +19,7 @@ pub const UdpSocket = struct {
     pub fn init(allocator: std.mem.Allocator) !UdpSocket {
         return .{
             .allocator = allocator,
-            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .io = zsync.BlockingIo.init(allocator),
             .udp_socket = null,
             .state = .closed,
             .options = undefined,
@@ -28,7 +28,9 @@ pub const UdpSocket = struct {
     
     pub fn deinit(self: *UdpSocket) void {
         if (self.udp_socket) |udp_socket| {
-            udp_socket.close();
+            udp_socket.close(self.io.io()) catch |err| {
+                std.log.warn("Error closing UDP socket: {}", .{err});
+            };
         }
         self.io.deinit();
     }

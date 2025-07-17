@@ -26,7 +26,7 @@ pub const ConnectionInfo = struct {
 
 pub const ConnectionPool = struct {
     allocator: std.mem.Allocator,
-    io: zsync.ThreadPoolIo,
+    io: zsync.BlockingIo,
     config: PoolConfig,
     connections: std.ArrayList(ConnectionInfo),
     idle_connections: std.ArrayList(*ConnectionInfo),
@@ -52,7 +52,7 @@ pub const ConnectionPool = struct {
         
         pool.* = .{
             .allocator = allocator,
-            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .io = zsync.BlockingIo.init(allocator),
             .config = config,
             .connections = std.ArrayList(ConnectionInfo).init(allocator),
             .idle_connections = std.ArrayList(*ConnectionInfo).init(allocator),
@@ -72,7 +72,10 @@ pub const ConnectionPool = struct {
         };
         
         if (config.enable_health_checks) {
-            _ = pool.io.async(healthCheckLoop, .{pool});
+            // TODO: Implement health check using proper zsync v0.3.2 task management
+            // This will be part of Phase 2 async task management improvements
+            // _ = pool.io.async(healthCheckLoop, .{pool});
+            std.log.info("Health checks enabled - will be implemented in Phase 2", .{});
         }
         
         return pool;

@@ -227,6 +227,42 @@ pub fn build(b: *std.Build) void {
     const tcp_zsync_step = b.step("test-tcp-zsync", "Test TCP transport with zsync integration");
     tcp_zsync_step.dependOn(&run_tcp_zsync_test.step);
 
+    // TCP Echo Server Example
+    const echo_server_exe = b.addExecutable(.{
+        .name = "tcp_echo_server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/tcp_echo_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_echo_server = b.addRunArtifact(echo_server_exe);
+    const echo_server_step = b.step("echo-server", "Run TCP Echo Server example");
+    echo_server_step.dependOn(&run_echo_server.step);
+
+    // Phase 2 Architecture Test
+    const phase2_test_exe = b.addExecutable(.{
+        .name = "phase2_architecture_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("phase2_architecture_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_phase2_test = b.addRunArtifact(phase2_test_exe);
+    const phase2_test_step = b.step("phase2-test", "Run Phase 2 architecture validation");
+    phase2_test_step.dependOn(&run_phase2_test.step);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.

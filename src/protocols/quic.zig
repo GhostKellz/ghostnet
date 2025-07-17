@@ -171,7 +171,7 @@ pub const QuicStream = struct {
             return error.FlowControlViolation;
         }
         
-        try self.send_buffer.appendSlice(data);
+        _ = self.send_buffer.write(data);
         self.send_offset += data.len;
         
         if (self.state == .idle) {
@@ -380,7 +380,7 @@ pub const QuicConnection = struct {
         self.state = .handshaking;
         
         // Initialize QUIC connection
-        self.quic_conn = try zquic.Connection.initClient(self.allocator, self.config);
+        self.quic_conn = try zquic.Connection.init(self.allocator, .client, .{});
         
         // Start handshake
         try self.performHandshake();
@@ -395,7 +395,7 @@ pub const QuicConnection = struct {
         self.state = .handshaking;
         
         // Initialize QUIC connection for server
-        self.quic_conn = try zquic.Connection.initServer(self.allocator, self.config);
+        self.quic_conn = try zquic.Connection.init(self.allocator, .server, .{});
         
         // Start handshake
         try self.performHandshake();
@@ -545,7 +545,7 @@ pub const QuicConnection = struct {
                 }
                 
                 // Add data to stream buffer
-                try stream.?.recv_buffer.appendSlice(frame.data);
+                _ = stream.?.recv_buffer.write(frame.data);
                 
                 if (frame.fin) {
                     stream.?.recv_fin = true;

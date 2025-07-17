@@ -993,7 +993,7 @@ pub const HttpClient = struct {
     fn sendRequestWithProtocol(self: *HttpClient, request: *HttpRequest, url: []const u8, protocol: HttpVersion) !HttpResponse {
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const host = uri.host orelse return error.MissingHost;
-        const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
+        const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) @as(u16, 443) else @as(u16, 80);
         const is_https = std.mem.eql(u8, uri.scheme, "https");
         
         // Prepare request headers

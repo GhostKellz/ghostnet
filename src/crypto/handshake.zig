@@ -994,33 +994,37 @@ pub const HandshakeManager = struct {
                 defer tls_handshake.deinit();
                 
                 // Check for cached session if 0-RTT is enabled
-                if (config.enable_0rtt and config.server_name) |server_name| {
-                    if (self.session_cache.get(server_name)) |cached_session| {
-                        // Restore session data
-                        tls_handshake.session_ticket = try self.allocator.dupe(u8, cached_session.session_ticket);
-                        tls_handshake.cipher_suite = cached_session.cipher_suite;
-                        tls_handshake.max_early_data_size = cached_session.max_early_data_size;
+                if (config.enable_0rtt) {
+                    if (config.server_name) |server_name| {
+                        if (self.session_cache.get(server_name)) |cached_session| {
+                            // Restore session data
+                            tls_handshake.session_ticket = try self.allocator.dupe(u8, cached_session.session_ticket);
+                            tls_handshake.cipher_suite = cached_session.cipher_suite;
+                            tls_handshake.max_early_data_size = cached_session.max_early_data_size;
+                        }
                     }
                 }
                 
                 const result = try tls_handshake.performHandshake(stream);
                 
                 // Cache session for future 0-RTT
-                if (config.enable_0rtt and config.server_name) |server_name| {
-                    if (result.session_info.session_ticket) |ticket| {
-                        const session = SessionCache.CachedSession{
-                            .session_ticket = try self.allocator.dupe(u8, ticket),
-                            .resumption_secret = if (result.session_info.resumption_secret) |secret| 
-                                try self.allocator.dupe(u8, secret) else 
-                                try self.allocator.alloc(u8, 0),
-                            .cipher_suite = result.session_info.cipher_suite,
-                            .server_name = server_name,
-                            .alpn_protocol = result.session_info.alpn_protocol,
-                            .timestamp = std.time.timestamp(),
-                            .max_early_data_size = result.session_info.max_early_data_size,
-                            .early_data_key = null,
-                        };
-                        try self.session_cache.store(server_name, session);
+                if (config.enable_0rtt) {
+                    if (config.server_name) |server_name| {
+                        if (result.session_info.session_ticket) |ticket| {
+                            const session = SessionCache.CachedSession{
+                                .session_ticket = try self.allocator.dupe(u8, ticket),
+                                .resumption_secret = if (result.session_info.resumption_secret) |secret| 
+                                    try self.allocator.dupe(u8, secret) else 
+                                    try self.allocator.alloc(u8, 0),
+                                .cipher_suite = result.session_info.cipher_suite,
+                                .server_name = server_name,
+                                .alpn_protocol = result.session_info.alpn_protocol,
+                                .timestamp = std.time.timestamp(),
+                                .max_early_data_size = result.session_info.max_early_data_size,
+                                .early_data_key = null,
+                            };
+                            try self.session_cache.store(server_name, session);
+                        }
                     }
                 }
                 

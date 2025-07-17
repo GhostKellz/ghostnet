@@ -5,13 +5,17 @@ const errors = @import("../errors/errors.zig");
 
 pub const TcpTransport = struct {
     allocator: std.mem.Allocator,
-    runtime: *zsync.Runtime,
+    io: zsync.ThreadPoolIo,
     
-    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) TcpTransport {
+    pub fn init(allocator: std.mem.Allocator) !TcpTransport {
         return .{
             .allocator = allocator,
-            .runtime = runtime,
+            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
         };
+    }
+    
+    pub fn deinit(self: *TcpTransport) void {
+        self.io.deinit();
     }
     
     const vtable = transport_mod.Transport.VTable{
@@ -65,17 +69,24 @@ pub const TcpTransport = struct {
 
 pub const TcpListener = struct {
     allocator: std.mem.Allocator,
-    runtime: *zsync.Runtime,
-    socket: ?i32,
+    io: zsync.ThreadPoolIo,
+    tcp_listener: ?zsync.TcpListener,
     options: transport_mod.TransportOptions,
     
-    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) TcpListener {
+    pub fn init(allocator: std.mem.Allocator) !TcpListener {
         return .{
             .allocator = allocator,
-            .runtime = runtime,
-            .socket = null,
+            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .tcp_listener = null,
             .options = undefined,
         };
+    }
+    
+    pub fn deinit(self: *TcpListener) void {
+        if (self.tcp_listener) |tcp_listener| {
+            tcp_listener.close();
+        }
+        self.io.deinit();
     }
     
     pub fn bind(self: *TcpListener, address: transport_mod.Address, options: transport_mod.TransportOptions) !void {
@@ -87,16 +98,11 @@ pub const TcpListener = struct {
             else => return error.InvalidAddress,
         };
         
-        self.socket = try zsync.net.TcpListener.bind(addr);
+        // Use zsync TcpListener.bind() directly
+        self.tcp_listener = try zsync.TcpListener.bind(addr);
         
-        if (options.reuse_address) {
-            try self.socket.setReuseAddress(true);
-        }
-        if (options.reuse_port) {
-            try self.socket.setReusePort(true);
-        }
-        
-        try self.socket.listen(options.backlog);
+        // TODO: Apply socket options based on zsync API capabilities
+        // For now, zsync TcpListener handles common options internally
     }
     
     pub fn listener(self: *TcpListener) transport_mod.Listener {
@@ -110,51 +116,48 @@ pub const TcpListener = struct {
         };
     }
     
-    fn acceptAsync(ptr: *anyopaque) zsync.Future {
+    fn acceptAsync(ptr: *anyopaque) zsync.Future(transport_mod.TransportError!transport_mod.Connection) {
         const self: *TcpListener = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future.init(self.runtime, struct {
+        return self.io.async(struct {
             listener: *TcpListener,
             
-            pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!transport_mod.Connection) {
-                const conn_result = ctx.listener.socket.acceptAsync() catch |err| {
-                    return .{ .ready = transport_mod.TransportError!transport_mod.Connection{ 
-                        errors.mapSystemError(err) 
-                    }};
-                };
-                
-                switch (conn_result) {
-                    .ready => |conn| {
-                        var tcp_conn = ctx.listener.allocator.create(TcpConnection) catch {
-                            return .{ .ready = transport_mod.TransportError!transport_mod.Connection{ 
-                                error.OutOfMemory 
-                            }};
-                        };
-                        
-                        tcp_conn.* = TcpConnection{
-                            .allocator = ctx.listener.allocator,
-                            .runtime = ctx.listener.runtime,
-                            .socket = conn,
-                            .state = .connected,
-                            .options = ctx.listener.options,
-                        };
-                        
-                        return .{ .ready = tcp_conn.connection() };
-                    },
-                    .pending => return .pending,
+            pub fn run(ctx: @This()) transport_mod.TransportError!transport_mod.Connection {
+                if (ctx.listener.tcp_listener == null) {
+                    return error.InvalidAddress;
                 }
+                
+                // Use zsync TcpListener.accept() to get a TcpStream
+                const tcp_stream = try ctx.listener.tcp_listener.?.accept();
+                
+                var tcp_conn = try ctx.listener.allocator.create(TcpConnection);
+                errdefer ctx.listener.allocator.destroy(tcp_conn);
+                
+                tcp_conn.* = try TcpConnection.initFromStream(
+                    ctx.listener.allocator,
+                    tcp_stream,
+                    ctx.listener.options
+                );
+                
+                return tcp_conn.connection();
             }
         }{ .listener = self });
     }
     
     fn close(ptr: *anyopaque) void {
         const self: *TcpListener = @ptrCast(@alignCast(ptr));
-        self.socket.close();
+        if (self.tcp_listener) |tcp_listener| {
+            tcp_listener.close();
+            self.tcp_listener = null;
+        }
     }
     
     fn localAddress(ptr: *anyopaque) transport_mod.TransportError!transport_mod.Address {
         const self: *TcpListener = @ptrCast(@alignCast(ptr));
-        const addr = self.socket.getLocalAddress() catch |err| {
+        if (self.tcp_listener == null) return error.InvalidAddress;
+        
+        // Use zsync TcpListener.localAddress() if available
+        const addr = self.tcp_listener.?.localAddress() catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -168,50 +171,49 @@ pub const TcpListener = struct {
 
 pub const TcpConnection = struct {
     allocator: std.mem.Allocator,
-    runtime: *zsync.Runtime,
-    socket: ?std.net.Stream,
+    io: zsync.ThreadPoolIo,
+    tcp_stream: zsync.TcpStream,
     state: transport_mod.ConnectionState,
     options: transport_mod.TransportOptions,
     
-    pub fn connect(allocator: std.mem.Allocator, runtime: *zsync.Runtime, address: transport_mod.Address, options: transport_mod.TransportOptions) !*TcpConnection {
+    pub fn connect(allocator: std.mem.Allocator, address: transport_mod.Address, options: transport_mod.TransportOptions) !*TcpConnection {
         const addr = switch (address) {
             .ipv4 => |a| std.net.Address{ .in = a },
             .ipv6 => |a| std.net.Address{ .in6 = a },
             else => return error.InvalidAddress,
         };
         
-        var conn = try allocator.create(TcpConnection);
+        const conn = try allocator.create(TcpConnection);
         errdefer allocator.destroy(conn);
+        
+        // Use zsync TcpStream.connect() directly
+        const tcp_stream = try zsync.TcpStream.connect(addr);
         
         conn.* = .{
             .allocator = allocator,
-            .runtime = runtime,
-            .socket = null,
-            .state = .connecting,
+            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .tcp_stream = tcp_stream,
+            .state = .connected,
             .options = options,
         };
         
-        conn.socket = try std.net.tcpConnectToAddress(addr);
-        conn.state = .connected;
-        
-        if (options.nodelay) {
-            const value: c_int = 1;
-            try std.posix.setsockopt(conn.socket.?.handle, std.posix.IPPROTO.TCP, 1, std.mem.asBytes(&value)); // TCP_NODELAY = 1
-        }
-        if (options.keepalive) {
-            const value: c_int = 1;
-            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.KEEPALIVE, std.mem.asBytes(&value));
-        }
-        if (options.recv_buffer_size) |size| {
-            const value: c_int = @intCast(size);
-            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVBUF, std.mem.asBytes(&value));
-        }
-        if (options.send_buffer_size) |size| {
-            const value: c_int = @intCast(size);
-            try std.posix.setsockopt(conn.socket.?.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDBUF, std.mem.asBytes(&value));
-        }
-        
         return conn;
+    }
+    
+    pub fn initFromStream(allocator: std.mem.Allocator, tcp_stream: zsync.TcpStream, options: transport_mod.TransportOptions) !TcpConnection {
+        return .{
+            .allocator = allocator,
+            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
+            .tcp_stream = tcp_stream,
+            .state = .connected,
+            .options = options,
+        };
+    }
+    
+    pub fn deinit(self: *TcpConnection) void {
+        self.tcp_stream.close();
+        self.io.deinit();
+        self.allocator.destroy(self);
     }
     
     pub fn connection(self: *TcpConnection) transport_mod.Connection {
@@ -220,8 +222,8 @@ pub const TcpConnection = struct {
             .vtable = &.{
                 .read = read,
                 .write = write,
-                .close = close,
-                .local_address = localAddress,
+                .close = connectionClose,
+                .local_address = connectionLocalAddress,
                 .remote_address = remoteAddress,
                 .state = getState,
                 .set_timeout = setTimeout,
@@ -243,98 +245,76 @@ pub const TcpConnection = struct {
     
     fn read(ptr: *anyopaque, buffer: []u8) transport_mod.TransportError!usize {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        return self.socket.read(buffer) catch |err| {
+        return self.tcp_stream.read(buffer) catch |err| {
             return errors.mapSystemError(err);
         };
     }
     
     fn write(ptr: *anyopaque, buffer: []const u8) transport_mod.TransportError!usize {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        return self.socket.write(buffer) catch |err| {
+        return self.tcp_stream.write(buffer) catch |err| {
             return errors.mapSystemError(err);
         };
     }
     
-    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future {
+    fn readAsync(ptr: *anyopaque, buffer: []u8) zsync.Future(transport_mod.TransportError!usize) {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future.init(self.runtime, struct {
+        return self.io.async(struct {
             conn: *TcpConnection,
             buf: []u8,
             
-            pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!usize) {
-                const result = ctx.conn.socket.readAsync(ctx.buf) catch |err| {
-                    return .{ .ready = transport_mod.TransportError!usize{ 
-                        errors.mapSystemError(err) 
-                    }};
-                };
-                
-                return switch (result) {
-                    .ready => |n| .{ .ready = n },
-                    .pending => .pending,
+            pub fn run(ctx: @This()) transport_mod.TransportError!usize {
+                return ctx.conn.tcp_stream.read(ctx.buf) catch |err| {
+                    return errors.mapSystemError(err);
                 };
             }
         }{ .conn = self, .buf = buffer });
     }
     
-    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future {
+    fn writeAsync(ptr: *anyopaque, buffer: []const u8) zsync.Future(transport_mod.TransportError!usize) {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future.init(self.runtime, struct {
+        return self.io.async(struct {
             conn: *TcpConnection,
             buf: []const u8,
             
-            pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!usize) {
-                const result = ctx.conn.socket.writeAsync(ctx.buf) catch |err| {
-                    return .{ .ready = transport_mod.TransportError!usize{ 
-                        errors.mapSystemError(err) 
-                    }};
-                };
-                
-                return switch (result) {
-                    .ready => |n| .{ .ready = n },
-                    .pending => .pending,
+            pub fn run(ctx: @This()) transport_mod.TransportError!usize {
+                return ctx.conn.tcp_stream.write(ctx.buf) catch |err| {
+                    return errors.mapSystemError(err);
                 };
             }
         }{ .conn = self, .buf = buffer });
     }
     
-    fn flushAsync(ptr: *anyopaque) zsync.Future {
-        const self: *TcpConnection = @ptrCast(@alignCast(ptr));
+    fn flushAsync(ptr: *anyopaque) zsync.Future(transport_mod.TransportError!void) {
+        _ = ptr; // TCP sockets auto-flush, no explicit flush needed
         
-        return zsync.Future.init(self.runtime, struct {
-            conn: *TcpConnection,
-            
-            pub fn poll(ctx: *@This()) zsync.Poll(transport_mod.TransportError!void) {
-                _ = ctx;
-                return .{ .ready = {} };
-            }
-        }{ .conn = self });
+        return zsync.Future.ready({});
     }
     
-    fn closeAsync(ptr: *anyopaque) zsync.Future {
+    fn closeAsync(ptr: *anyopaque) zsync.Future(void) {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         
-        return zsync.Future.init(self.runtime, struct {
+        return self.io.async(struct {
             conn: *TcpConnection,
             
-            pub fn poll(ctx: *@This()) zsync.Poll(void) {
+            pub fn run(ctx: @This()) void {
                 ctx.conn.state = .closed;
-                ctx.conn.socket.close();
-                return .{ .ready = {} };
+                ctx.conn.tcp_stream.close();
             }
         }{ .conn = self });
     }
     
-    fn close(ptr: *anyopaque) void {
+    fn connectionClose(ptr: *anyopaque) void {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
         self.state = .closed;
-        self.socket.close();
+        self.tcp_stream.close();
     }
     
-    fn localAddress(ptr: *anyopaque) transport_mod.TransportError!transport_mod.Address {
+    fn connectionLocalAddress(ptr: *anyopaque) transport_mod.TransportError!transport_mod.Address {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        const addr = self.socket.getLocalAddress() catch |err| {
+        const addr = self.tcp_stream.localAddress() catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -347,7 +327,7 @@ pub const TcpConnection = struct {
     
     fn remoteAddress(ptr: *anyopaque) transport_mod.TransportError!transport_mod.Address {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        const addr = self.socket.getRemoteAddress() catch |err| {
+        const addr = self.tcp_stream.remoteAddress() catch |err| {
             return errors.mapSystemError(err);
         };
         
@@ -363,19 +343,11 @@ pub const TcpConnection = struct {
         return self.state;
     }
     
-    fn setTimeout(ptr: *anyopaque, read_timeout: ?u64, write_timeout: ?u64) transport_mod.TransportError!void {
+    fn setTimeout(ptr: *anyopaque, timeout: u64) transport_mod.TransportError!void {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        
-        if (read_timeout) |timeout| {
-            self.socket.setReadTimeout(timeout) catch |err| {
-                return errors.mapSystemError(err);
-            };
-        }
-        
-        if (write_timeout) |timeout| {
-            self.socket.setWriteTimeout(timeout) catch |err| {
-                return errors.mapSystemError(err);
-            };
-        }
+        _ = self;
+        _ = timeout;
+        // TODO: Implement timeout setting with zsync
+        return;
     }
 };

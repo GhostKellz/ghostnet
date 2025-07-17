@@ -1,6 +1,9 @@
 const std = @import("std");
 const zsync = @import("zsync");
 
+pub const tcp = @import("tcp.zig");
+pub const udp = @import("udp.zig");
+
 pub const TransportError = error{
     ConnectionRefused,
     ConnectionReset,
@@ -14,6 +17,11 @@ pub const TransportError = error{
     InvalidState,
     OutOfMemory,
     Unexpected,
+    // Additional errors for complete implementation
+    ConnectionTimedOut,
+    ConnectionAborted,
+    InvalidSocket,
+    NotListening,
 };
 
 pub const Address = union(enum) {
@@ -38,13 +46,13 @@ pub const TransportOptions = struct {
     backlog: u31 = 128,
     reuse_address: bool = true,
     reuse_port: bool = false,
-    nodelay: bool = true,
-    keepalive: bool = true,
+    no_delay: bool = true,
+    keep_alive: bool = true,
     keepalive_interval: u32 = 60,
-    recv_buffer_size: ?u32 = null,
-    send_buffer_size: ?u32 = null,
+    send_buffer_size: u32 = 8192,
+    receive_buffer_size: u32 = 8192,
+    timeout: u32 = 5000,
     linger: ?u16 = null,
-    allocator: std.mem.Allocator,
 };
 
 pub const Transport = struct {

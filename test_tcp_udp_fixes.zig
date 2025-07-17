@@ -4,22 +4,24 @@ const zsync = @import("zsync");
 const ghostnet = @import("ghostnet");
 
 test "TCP setTcpNoDelay fix" {
-    var runtime = try zsync.Runtime.init(testing.allocator, .{});
-    defer runtime.deinit();
+    // Use new zsync BlockingIo interface
+    var blocking_io = zsync.BlockingIo.init(testing.allocator);
+    defer blocking_io.deinit();
+    const io = blocking_io.io();
     
-    // Test TCP connection with nodelay option
+    // Test TCP connection with no_delay option
     const tcp_options = ghostnet.TransportOptions{
-        .nodelay = true,
-        .keepalive = false,
+        .no_delay = true,
+        .keep_alive = false,
         .reuse_address = false,
         .reuse_port = false,
-        .recv_buffer_size = null,
-        .send_buffer_size = null,
-        .allocator = testing.allocator,
+        .send_buffer_size = 8192,
+        .receive_buffer_size = 8192,
+        .timeout = 5000,
     };
     
     // This should not fail due to setTcpNoDelay method missing
-    const result = ghostnet.TcpConnection.connect(testing.allocator, runtime, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{127, 0, 0, 1}, 80) }, tcp_options);
+    const result = ghostnet.TcpConnection.connect(testing.allocator, io, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{127, 0, 0, 1}, 80) }, tcp_options);
     
     // We expect connection to fail (since no server is listening), but not due to setTcpNoDelay
     // Just check that the method compiles and runs

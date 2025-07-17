@@ -945,10 +945,32 @@ pub const KademliaNode = struct {
     }
     
     fn handlePong(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
-        _ = self;
-        _ = message;
-        _ = sender_addr;
-        // Handle pong response
+        // Update the node's activity in the routing table
+        if (message.sender_id) |sender_id| {
+            const node_contact = NodeContact{
+                .id = sender_id,
+                .address = sender_addr,
+                .last_seen = std.time.timestamp(),
+                .distance = try self.calculateDistance(self.config.node_id, sender_id),
+            };
+            
+            try self.routing_table.updateNode(node_contact);
+            
+            // If this is a response to a pending request, complete it
+            if (message.transaction_id) |tx_id| {
+                if (self.pending_requests.get(tx_id)) |pending_request| {
+                    // Mark the request as completed
+                    pending_request.completed = true;
+                    pending_request.response_time = std.time.timestamp();
+                    
+                    // Remove from pending requests
+                    _ = self.pending_requests.remove(tx_id);
+                    
+                    // Update node reachability statistics
+                    try self.updateNodeReachability(sender_id, true);
+                }
+            }
+        }
     }
     
     fn handleFindNode(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -993,10 +1015,51 @@ pub const KademliaNode = struct {
     }
     
     fn handleFindValueResponse(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
-        _ = self;
-        _ = message;
-        _ = sender_addr;
-        // Handle find value response
+        // Update the node's activity in the routing table
+        if (message.sender_id) |sender_id| {
+            const node_contact = NodeContact{
+                .id = sender_id,
+                .address = sender_addr,
+                .last_seen = std.time.timestamp(),
+                .distance = try self.calculateDistance(self.config.node_id, sender_id),
+            };
+            
+            try self.routing_table.updateNode(node_contact);
+        }
+        
+        // Handle the response to a pending find value request
+        if (message.transaction_id) |tx_id| {
+            if (self.pending_requests.get(tx_id)) |pending_request| {
+                // Mark the request as completed
+                pending_request.completed = true;
+                pending_request.response_time = std.time.timestamp();
+                
+                // If we got a value, cache it locally
+                if (message.value) |value| {
+                    if (message.key) |key| {
+                        try self.storeLocally(key, value);
+                        
+                        // Update statistics
+                        _ = self.stats.values_found.fetchAdd(1, .seq_cst);
+                    }
+                } else {
+                    // If no value, but we got nodes, add them to routing table
+                    if (message.nodes) |nodes| {
+                        for (nodes) |node| {
+                            try self.routing_table.addNode(node);
+                        }
+                    }
+                }
+                
+                // Remove from pending requests
+                _ = self.pending_requests.remove(tx_id);
+                
+                // Update node reachability statistics
+                if (message.sender_id) |sender_id| {
+                    try self.updateNodeReachability(sender_id, true);
+                }
+            }
+        }
     }
     
     fn handleStore(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
@@ -1016,15 +1079,52 @@ pub const KademliaNode = struct {
     }
     
     fn handleStoreResponse(self: *KademliaNode, message: *KademliaMessage, sender_addr: transport.Address) !void {
-        _ = self;
-        _ = message;
-        _ = sender_addr;
-        // Handle store response
+        // Update the node's activity in the routing table
+        if (message.sender_id) |sender_id| {
+            const node_contact = NodeContact{
+                .id = sender_id,
+                .address = sender_addr,
+                .last_seen = std.time.timestamp(),
+                .distance = try self.calculateDistance(self.config.node_id, sender_id),
+            };
+            
+            try self.routing_table.updateNode(node_contact);
+        }
+        
+        // Handle the response to a pending store request
+        if (message.transaction_id) |tx_id| {
+            if (self.pending_requests.get(tx_id)) |pending_request| {
+                // Mark the request as completed
+                pending_request.completed = true;
+                pending_request.response_time = std.time.timestamp();
+                
+                // Update statistics based on success/failure
+                if (message.success) |success| {
+                    if (success) {
+                        _ = self.stats.stores_successful.fetchAdd(1, .seq_cst);
+                    } else {
+                        _ = self.stats.stores_failed.fetchAdd(1, .seq_cst);
+                    }
+                } else {
+                    // If success field is not present, assume success
+                    _ = self.stats.stores_successful.fetchAdd(1, .seq_cst);
+                }
+                
+                // Remove from pending requests
+                _ = self.pending_requests.remove(tx_id);
+                
+                // Update node reachability statistics
+                if (message.sender_id) |sender_id| {
+                    try self.updateNodeReachability(sender_id, true);
+                }
+            }
+        }
     }
     
     fn maintenanceLoop(self: *KademliaNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(60000000000); // 1 minute
+            // Use async sleep instead of blocking
+            try self.runtime.sleep(60 * 1000); // 1 minute
             
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -1051,7 +1151,8 @@ pub const KademliaNode = struct {
     
     fn refreshLoop(self: *KademliaNode) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(self.config.refresh_interval * 1000000); // Convert to nanoseconds
+            // Use async sleep instead of blocking
+            try self.runtime.sleep(self.config.refresh_interval); // Convert to nanoseconds
             
             // Refresh routing table buckets
             self.refreshRoutingTable() catch {};

@@ -657,7 +657,8 @@ pub const WebSocketConnection = struct {
                 break;
             }
             
-            std.time.sleep(1000000000); // 1 second
+            // Use async sleep instead of blocking
+            try self.runtime.sleep(1000); // 1 second
         }
     }
     
@@ -777,7 +778,8 @@ pub const WebSocketServer = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    // Use async sleep instead of blocking
+                    try self.runtime.sleep(1); // 1ms
                     continue;
                 },
             }

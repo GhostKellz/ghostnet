@@ -767,7 +767,8 @@ pub const WireGuardTunnel = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    // Use async sleep instead of blocking
+                    try self.runtime.sleep(1);
                     continue;
                 },
             }
@@ -788,13 +789,15 @@ pub const WireGuardTunnel = struct {
                 };
             }
             
-            std.time.sleep(1000000); // 1ms
+            // Use async sleep instead of blocking
+            try self.runtime.sleep(1);
         }
     }
     
     fn keepaliveLoop(self: *WireGuardTunnel) void {
         while (self.running.load(.seq_cst)) {
-            std.time.sleep(self.config.keepalive_interval * 1000000000); // Convert to nanoseconds
+            // Use async sleep instead of blocking
+            try self.runtime.sleep(self.config.keepalive_interval * 1000);
             
             self.mutex.lock();
             defer self.mutex.unlock();
@@ -820,7 +823,8 @@ pub const WireGuardTunnel = struct {
                 };
                 self.allocator.free(packet.data);
             } else {
-                std.time.sleep(1000000); // 1ms
+                // Use async sleep instead of blocking
+            try self.runtime.sleep(1);
             }
         }
     }

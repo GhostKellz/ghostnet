@@ -510,7 +510,8 @@ pub const QuicConnection = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    // Use async sleep instead of blocking
+                    try self.runtime.sleep(1);
                     continue;
                 },
             }
@@ -982,7 +983,8 @@ pub const QuicServer = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    // Use async sleep instead of blocking
+                    try self.runtime.sleep(1);
                     continue;
                 },
             }

@@ -14,6 +14,34 @@ pub const GossipMessageType = enum(u8) {
     peer_exchange = 0x06,
     topic_list = 0x07,
     anti_entropy = 0x08,
+    sync_request = 0x09,
+    sync_response = 0x0A,
+};
+
+pub const TopicDigest = struct {
+    message_count: u32,
+    latest_timestamp: i64,
+    content_hash: u64,
+    
+    pub fn serialize(self: TopicDigest, buffer: []u8) void {
+        std.mem.writeInt(u32, buffer[0..4], self.message_count, .big);
+        std.mem.writeInt(i64, buffer[4..12], self.latest_timestamp, .big);
+        std.mem.writeInt(u64, buffer[12..20], self.content_hash, .big);
+    }
+    
+    pub fn deserialize(buffer: []const u8) TopicDigest {
+        return TopicDigest{
+            .message_count = std.mem.readInt(u32, buffer[0..4], .big),
+            .latest_timestamp = std.mem.readInt(i64, buffer[4..12], .big),
+            .content_hash = std.mem.readInt(u64, buffer[12..20], .big),
+        };
+    }
+    
+    pub fn isDifferent(self: TopicDigest, other: TopicDigest) bool {
+        return self.message_count != other.message_count or
+               self.latest_timestamp != other.latest_timestamp or
+               self.content_hash != other.content_hash;
+    }
 };
 
 pub const GossipMessage = struct {
@@ -161,6 +189,10 @@ pub const GossipPeer = struct {
     topics: std.StringHashMap(void),
     sequence_number: u64,
     heartbeat_failures: u32,
+    rtt: f64, // Round-trip time in milliseconds
+    bandwidth: f64, // Estimated bandwidth in bytes/sec
+    reliability: f64, // Success rate (0.0 to 1.0)
+    network_distance: u8, // Estimated network hops
     
     pub fn init(allocator: std.mem.Allocator, id: [16]u8, address: transport.Address) !*GossipPeer {
         const peer = try allocator.create(GossipPeer);
@@ -171,6 +203,10 @@ pub const GossipPeer = struct {
             .topics = std.StringHashMap(void).init(allocator),
             .sequence_number = 0,
             .heartbeat_failures = 0,
+            .rtt = 100.0, // Default 100ms
+            .bandwidth = 1000000.0, // Default 1MB/s
+            .reliability = 1.0, // Start with perfect reliability
+            .network_distance = 1, // Default to 1 hop
         };
         return peer;
     }
@@ -199,6 +235,28 @@ pub const GossipPeer = struct {
     
     pub fn isStale(self: *GossipPeer, timeout: i64) bool {
         return (std.time.timestamp() - self.last_seen) > timeout;
+    }
+    
+    pub fn updateNetworkMetrics(self: *GossipPeer, rtt: f64, success: bool) void {
+        // Update RTT with exponential moving average
+        self.rtt = 0.8 * self.rtt + 0.2 * rtt;
+        
+        // Update reliability
+        if (success) {
+            self.reliability = 0.9 * self.reliability + 0.1 * 1.0;
+        } else {
+            self.reliability = 0.9 * self.reliability + 0.1 * 0.0;
+        }
+    }
+    
+    pub fn getNetworkScore(self: *GossipPeer) f64 {
+        // Calculate composite network score (higher is better)
+        // Factor in reliability, RTT (inverse), and bandwidth
+        const rtt_score = 1000.0 / (self.rtt + 1.0); // Inverse RTT
+        const bandwidth_score = self.bandwidth / 1000000.0; // Normalize to MB/s
+        const distance_penalty = 1.0 / (@as(f64, @floatFromInt(self.network_distance)) + 1.0);
+        
+        return self.reliability * rtt_score * bandwidth_score * distance_penalty;
     }
 };
 
@@ -270,16 +328,38 @@ pub const GossipTopic = struct {
         }
     }
     
-    pub fn getRecentMessages(self: *GossipTopic, since: i64) []const GossipMessage {
-        var result = std.ArrayList(GossipMessage).init(std.heap.page_allocator);
+    pub fn getRecentMessages(self: *GossipTopic, allocator: std.mem.Allocator, since: i64) ![]GossipMessage {
+        var result = std.ArrayList(GossipMessage).init(allocator);
         
         for (self.message_cache.items) |msg| {
             if (msg.timestamp > since) {
-                result.append(msg) catch continue;
+                try result.append(msg);
             }
         }
         
-        return result.toOwnedSlice() catch &[_]GossipMessage{};
+        return result.toOwnedSlice();
+    }
+    
+    pub fn getTopicDigest(self: *GossipTopic) TopicDigest {
+        var latest_timestamp: i64 = 0;
+        var message_count: u32 = 0;
+        var hash_accumulator: u64 = 0;
+        
+        for (self.message_cache.items) |msg| {
+            if (msg.timestamp > latest_timestamp) {
+                latest_timestamp = msg.timestamp;
+            }
+            message_count += 1;
+            
+            // Simple hash of sequence number and timestamp
+            hash_accumulator = hash_accumulator ^ msg.sequence_number ^ @as(u64, @bitCast(msg.timestamp));
+        }
+        
+        return TopicDigest{
+            .message_count = message_count,
+            .latest_timestamp = latest_timestamp,
+            .content_hash = hash_accumulator,
+        };
     }
 };
 
@@ -431,6 +511,7 @@ pub const GossipNode = struct {
         _ = try self.runtime.spawn(receiveLoop, .{self}, .normal);
         _ = try self.runtime.spawn(heartbeatLoop, .{self}, .normal);
         _ = try self.runtime.spawn(antiEntropyLoop, .{self}, .normal);
+        _ = try self.runtime.spawn(peerExchangeLoop, .{self}, .normal);
         _ = try self.runtime.spawn(maintenanceLoop, .{self}, .normal);
     }
     
@@ -583,15 +664,52 @@ pub const GossipNode = struct {
             }
         }
         
-        // Select random subset for gossip (fanout)
+        // Sort peers by network score (best first)
+        std.sort.block(*GossipPeer, interested_peers.items, {}, struct {
+            fn lessThan(context: void, a: *GossipPeer, b: *GossipPeer) bool {
+                _ = context;
+                return a.getNetworkScore() > b.getNetworkScore(); // Higher score is better
+            }
+        }.lessThan);
+        
+        // Select top peers for gossip with some randomness
         const fanout = std.math.min(self.config.fanout, interested_peers.items.len);
+        const best_count = std.math.min(fanout / 2, interested_peers.items.len); // Take top 50%
+        const random_count = fanout - best_count; // Random selection for the rest
+        
         var i: usize = 0;
-        while (i < fanout and interested_peers.items.len > 0) {
-            const index = std.crypto.random.intRangeAtMost(usize, 0, interested_peers.items.len - 1);
-            const peer = interested_peers.swapRemove(index);
+        
+        // Send to best peers first
+        while (i < best_count) {
+            const peer = interested_peers.items[i];
+            const start_time = std.time.milliTimestamp();
             
-            self.sendMessageToPeer(message, peer) catch {};
+            const success = if (self.sendMessageToPeer(message, peer)) |_| true else |_| false;
+            const end_time = std.time.milliTimestamp();
+            const rtt = @as(f64, @floatFromInt(end_time - start_time));
+            
+            peer.updateNetworkMetrics(rtt, success);
             i += 1;
+        }
+        
+        // Send to random subset of remaining peers
+        var remaining_peers = interested_peers.items[best_count..];
+        var j: usize = 0;
+        while (j < random_count and remaining_peers.len > 0) {
+            const index = std.crypto.random.intRangeAtMost(usize, 0, remaining_peers.len - 1);
+            const peer = remaining_peers[index];
+            
+            const start_time = std.time.milliTimestamp();
+            const success = if (self.sendMessageToPeer(message, peer)) |_| true else |_| false;
+            const end_time = std.time.milliTimestamp();
+            const rtt = @as(f64, @floatFromInt(end_time - start_time));
+            
+            peer.updateNetworkMetrics(rtt, success);
+            
+            // Remove selected peer from remaining list
+            remaining_peers[index] = remaining_peers[remaining_peers.len - 1];
+            remaining_peers = remaining_peers[0..remaining_peers.len - 1];
+            j += 1;
         }
     }
     
@@ -663,6 +781,8 @@ pub const GossipNode = struct {
             .peer_exchange => try self.handlePeerExchange(&message, sender_addr),
             .topic_list => try self.handleTopicList(&message, sender_addr),
             .anti_entropy => try self.handleAntiEntropy(&message, sender_addr),
+            .sync_request => try self.handleSyncRequest(&message, sender_addr),
+            .sync_response => try self.handleSyncResponse(&message, sender_addr),
         }
     }
     
@@ -722,10 +842,55 @@ pub const GossipNode = struct {
     }
     
     fn handlePeerExchange(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
-        _ = self;
-        _ = message;
-        _ = sender_addr;
-        // Handle peer exchange
+        // Parse peer exchange payload: each peer is 16 bytes ID + address info
+        var offset: usize = 0;
+        const payload = message.payload;
+        
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        while (offset + 16 <= payload.len) {
+            // Extract peer ID
+            const peer_id = payload[offset..offset + 16][0..16].*;
+            offset += 16;
+            
+            // Extract address type and address
+            if (offset >= payload.len) break;
+            const addr_type = payload[offset];
+            offset += 1;
+            
+            var peer_addr: transport.Address = undefined;
+            switch (addr_type) {
+                4 => { // IPv4
+                    if (offset + 6 > payload.len) break;
+                    const addr_bytes = payload[offset..offset + 4][0..4].*;
+                    const port = (@as(u16, payload[offset + 4]) << 8) | payload[offset + 5];
+                    peer_addr = transport.Address{ .ipv4 = std.net.Ip4Address.init(addr_bytes, port) };
+                    offset += 6;
+                },
+                6 => { // IPv6
+                    if (offset + 18 > payload.len) break;
+                    const addr_bytes = payload[offset..offset + 16][0..16].*;
+                    const port = (@as(u16, payload[offset + 16]) << 8) | payload[offset + 17];
+                    peer_addr = transport.Address{ .ipv6 = std.net.Ipv6Address.init(addr_bytes, port, 0, 0) };
+                    offset += 18;
+                },
+                else => break,
+            }
+            
+            // Add peer if we don't already know about it and have capacity
+            if (!self.peers.contains(peer_id) and self.peers.count() < self.config.max_peers) {
+                const new_peer = try GossipPeer.init(self.allocator, peer_id, peer_addr);
+                try self.peers.put(peer_id, new_peer);
+                try self.peer_addresses.put(peer_addr, peer_id);
+                _ = self.stats.peers_connected.fetchAdd(1, .seq_cst);
+            }
+        }
+        
+        // Send our own peer list back if this was a request
+        if (self.peer_addresses.get(sender_addr)) |sender_id| {
+            try self.sendPeerExchangeResponse(sender_id);
+        }
     }
     
     fn handleTopicList(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
@@ -736,10 +901,90 @@ pub const GossipNode = struct {
     }
     
     fn handleAntiEntropy(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
-        _ = self;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        if (self.peer_addresses.get(sender_addr)) |peer_id| {
+            if (self.peers.get(peer_id)) |peer| {
+                // Parse peer's topic digests from payload
+                var offset: usize = 0;
+                var topics_to_sync = std.ArrayList([]const u8).init(self.allocator);
+                defer topics_to_sync.deinit();
+                
+                while (offset + 20 < message.payload.len) {
+                    // Find topic name (terminated by 0 byte)
+                    const topic_start = offset;
+                    while (offset < message.payload.len and message.payload[offset] != 0) {
+                        offset += 1;
+                    }
+                    
+                    if (offset >= message.payload.len) break;
+                    
+                    const topic_name = message.payload[topic_start..offset];
+                    offset += 1; // Skip separator
+                    
+                    if (offset + 20 > message.payload.len) break;
+                    
+                    // Parse peer's digest
+                    const peer_digest = TopicDigest.deserialize(message.payload[offset..offset + 20]);
+                    offset += 20;
+                    
+                    // Compare with our digest
+                    if (self.topics.get(topic_name)) |topic| {
+                        const our_digest = topic.getTopicDigest();
+                        
+                        if (our_digest.isDifferent(peer_digest)) {
+                            try topics_to_sync.append(topic_name);
+                        }
+                    }
+                }
+                
+                // Send sync response with our missing messages
+                try self.sendSyncResponse(peer, topics_to_sync.items);
+            }
+        }
+    }
+    
+    fn sendSyncResponse(self: *GossipNode, peer: *GossipPeer, topics_to_sync: []const []const u8) !void {
+        for (topics_to_sync) |topic_name| {
+            if (self.topics.get(topic_name)) |topic| {
+                // Send recent messages from this topic
+                const cutoff_time = std.time.timestamp() - 300; // Last 5 minutes
+                const recent_messages = try topic.getRecentMessages(self.allocator, cutoff_time);
+                defer self.allocator.free(recent_messages);
+                
+                for (recent_messages) |recent_msg| {
+                    // Create sync message for each recent message
+                    var sync_msg = try GossipMessage.init(
+                        self.allocator,
+                        .sync_response,
+                        recent_msg.sender_id,
+                        recent_msg.topic,
+                        recent_msg.payload
+                    );
+                    defer sync_msg.deinit(self.allocator);
+                    
+                    sync_msg.sequence_number = recent_msg.sequence_number;
+                    sync_msg.timestamp = recent_msg.timestamp;
+                    
+                    try self.sendMessageToPeer(&sync_msg, peer);
+                }
+            }
+        }
+    }
+    
+    fn handleSyncRequest(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
         _ = message;
         _ = sender_addr;
-        // Handle anti-entropy
+        // Handle sync request - similar to anti-entropy but more targeted
+    }
+    
+    fn handleSyncResponse(self: *GossipNode, message: *GossipMessage, sender_addr: transport.Address) !void {
+        // Process sync response message like a regular publish
+        try self.handlePublish(message, sender_addr);
+        
+        // Update statistics
+        _ = self.stats.messages_received.fetchAdd(1, .seq_cst);
     }
     
     fn heartbeatLoop(self: *GossipNode) void {
@@ -767,6 +1012,105 @@ pub const GossipNode = struct {
         try self.sendMessageToPeer(&message, peer);
     }
     
+    fn sendAntiEntropyRequest(self: *GossipNode, peer: *GossipPeer) !void {
+        // Create digest of our current topic states
+        var digest_payload = std.ArrayList(u8).init(self.allocator);
+        defer digest_payload.deinit();
+        
+        var topic_iter = self.topics.iterator();
+        while (topic_iter.next()) |entry| {
+            const topic_name = entry.key_ptr.*;
+            const topic = entry.value_ptr.*;
+            
+            // Add topic name
+            try digest_payload.appendSlice(topic_name);
+            try digest_payload.append(0); // Separator
+            
+            // Add topic digest (20 bytes)
+            const digest = topic.getTopicDigest();
+            var digest_buffer: [20]u8 = undefined;
+            digest.serialize(&digest_buffer);
+            try digest_payload.appendSlice(&digest_buffer);
+        }
+        
+        var message = try GossipMessage.init(self.allocator, .anti_entropy, self.config.node_id, "", digest_payload.items);
+        defer message.deinit(self.allocator);
+        
+        message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
+        
+        try self.sendMessageToPeer(&message, peer);
+    }
+    
+    fn sendPeerExchangeResponse(self: *GossipNode, requesting_peer_id: [16]u8) !void {
+        // Create payload with up to 10 random peers
+        var exchange_payload = std.ArrayList(u8).init(self.allocator);
+        defer exchange_payload.deinit();
+        
+        var peer_count: usize = 0;
+        var peer_iter = self.peers.iterator();
+        while (peer_iter.next()) |entry| {
+            const peer = entry.value_ptr.*;
+            if (peer_count >= 10 or std.mem.eql(u8, &peer.id, &requesting_peer_id)) continue;
+            
+            // Add peer ID
+            try exchange_payload.appendSlice(&peer.id);
+            
+            // Add address info
+            switch (peer.address) {
+                .ipv4 => |addr| {
+                    try exchange_payload.append(4); // IPv4 type
+                    try exchange_payload.appendSlice(std.mem.asBytes(&addr.sa.addr));
+                    try exchange_payload.append(@intCast(addr.sa.port >> 8));
+                    try exchange_payload.append(@intCast(addr.sa.port & 0xFF));
+                },
+                .ipv6 => |addr| {
+                    try exchange_payload.append(6); // IPv6 type
+                    try exchange_payload.appendSlice(&addr.sa.addr);
+                    try exchange_payload.append(@intCast(addr.sa.port >> 8));
+                    try exchange_payload.append(@intCast(addr.sa.port & 0xFF));
+                },
+                else => continue,
+            }
+            
+            peer_count += 1;
+        }
+        
+        if (self.peers.get(requesting_peer_id)) |requesting_peer| {
+            var message = try GossipMessage.init(self.allocator, .peer_exchange, self.config.node_id, "", exchange_payload.items);
+            defer message.deinit(self.allocator);
+            
+            message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
+            try self.sendMessageToPeer(&message, requesting_peer);
+        }
+    }
+    
+    fn initiatePeerExchange(self: *GossipNode) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        // Select a random peer to exchange with
+        if (self.peers.count() == 0) return;
+        
+        var peer_list = std.ArrayList(*GossipPeer).init(self.allocator);
+        defer peer_list.deinit();
+        
+        var peer_iter = self.peers.iterator();
+        while (peer_iter.next()) |entry| {
+            try peer_list.append(entry.value_ptr.*);
+        }
+        
+        if (peer_list.items.len > 0) {
+            const random_index = std.crypto.random.intRangeAtMost(usize, 0, peer_list.items.len - 1);
+            const peer = peer_list.items[random_index];
+            
+            var message = try GossipMessage.init(self.allocator, .peer_exchange, self.config.node_id, "", "");
+            defer message.deinit(self.allocator);
+            
+            message.sequence_number = self.sequence_counter.fetchAdd(1, .seq_cst);
+            try self.sendMessageToPeer(&message, peer);
+        }
+    }
+    
     fn antiEntropyLoop(self: *GossipNode) void {
         while (self.running.load(.seq_cst)) {
             std.time.sleep(self.config.anti_entropy_interval * 1000000); // Convert to nanoseconds
@@ -776,9 +1120,35 @@ pub const GossipNode = struct {
         }
     }
     
+    fn peerExchangeLoop(self: *GossipNode) void {
+        while (self.running.load(.seq_cst)) {
+            std.time.sleep(30000000000); // 30 seconds
+            
+            // Initiate peer exchange
+            self.initiatePeerExchange() catch {};
+        }
+    }
+    
     fn performAntiEntropy(self: *GossipNode) !void {
-        _ = self;
-        // Implement anti-entropy synchronization
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        // Select random subset of peers for anti-entropy
+        var peers_to_sync = std.ArrayList(*GossipPeer).init(self.allocator);
+        defer peers_to_sync.deinit();
+        
+        var peer_iter = self.peers.iterator();
+        while (peer_iter.next()) |entry| {
+            const peer = entry.value_ptr.*;
+            if (peers_to_sync.items.len < 3) { // Sync with up to 3 peers
+                try peers_to_sync.append(peer);
+            }
+        }
+        
+        // For each peer, send anti-entropy message with our topic digests
+        for (peers_to_sync.items) |peer| {
+            try self.sendAntiEntropyRequest(peer);
+        }
     }
     
     fn maintenanceLoop(self: *GossipNode) void {

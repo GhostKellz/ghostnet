@@ -249,6 +249,9 @@ pub const QuicConnection = struct {
     packets_sent: std.atomic.Value(u64),
     packets_received: std.atomic.Value(u64),
     last_activity: std.atomic.Value(i64),
+    early_data_accepted: bool,
+    early_data_buffer: std.ArrayList(u8),
+    session_cache_key: ?[]const u8,
     mutex: std.Thread.Mutex,
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, config: QuicConfig) !*QuicConnection {
@@ -272,6 +275,9 @@ pub const QuicConnection = struct {
             .packets_sent = std.atomic.Value(u64).init(0),
             .packets_received = std.atomic.Value(u64).init(0),
             .last_activity = std.atomic.Value(i64).init(std.time.timestamp()),
+            .early_data_accepted = false,
+            .early_data_buffer = std.ArrayList(u8).init(allocator),
+            .session_cache_key = null,
             .mutex = .{},
         };
         
@@ -291,6 +297,11 @@ pub const QuicConnection = struct {
             entry.value_ptr.*.deinit();
         }
         self.streams.deinit();
+        
+        self.early_data_buffer.deinit();
+        if (self.session_cache_key) |key| {
+            self.allocator.free(key);
+        }
         
         self.socket.close();
         self.allocator.destroy(self);
@@ -387,6 +398,16 @@ pub const QuicConnection = struct {
         // Simplified handshake - real implementation would be more complex
         var handshake_buffer: [1024]u8 = undefined;
         
+        // Check for 0-RTT support
+        if (self.config.enable_0rtt) {
+            // Try to send early data with initial packet
+            const zero_rtt_packet = try self.create0RTTPacket(&handshake_buffer);
+            if (zero_rtt_packet.len > 0) {
+                _ = try self.socket.sendTo(zero_rtt_packet, self.remote_addr);
+                // Continue with regular handshake
+            }
+        }
+        
         // Send initial packet
         const initial_packet = try self.quic_conn.createInitialPacket(&handshake_buffer);
         _ = try self.socket.sendTo(initial_packet, self.remote_addr);
@@ -470,13 +491,79 @@ pub const QuicConnection = struct {
                 // Handle connection close
             },
             .max_data => {
-                // Update flow control
+                // Update connection-level flow control
+                self.mutex.lock();
+                defer self.mutex.unlock();
+                
+                // Update max data we can send on this connection
+                const max_data = frame.max_data orelse return error.InvalidFrame;
+                // Store max_data in connection state (simplified)
+                _ = max_data;
             },
             .max_stream_data => {
-                // Update stream flow control
+                // Update stream-level flow control
+                const stream_id = frame.stream_id;
+                const max_stream_data = frame.max_stream_data orelse return error.InvalidFrame;
+                
+                self.mutex.lock();
+                defer self.mutex.unlock();
+                
+                if (self.streams.get(stream_id)) |stream| {
+                    stream.max_send_data = max_stream_data;
+                }
+            },
+            .reset_stream => {
+                // Handle stream reset
+                const stream_id = frame.stream_id;
+                const error_code = frame.error_code orelse 0;
+                
+                self.mutex.lock();
+                defer self.mutex.unlock();
+                
+                if (self.streams.get(stream_id)) |stream| {
+                    stream.reset(error_code);
+                }
+            },
+            .stop_sending => {
+                // Handle stop sending frame
+                const stream_id = frame.stream_id;
+                
+                self.mutex.lock();
+                defer self.mutex.unlock();
+                
+                if (self.streams.get(stream_id)) |stream| {
+                    stream.send_fin = true;
+                    if (stream.state == .open) {
+                        stream.state = if (stream.recv_fin) .closed else .half_closed_local;
+                    }
+                }
+            },
+            .ack => {
+                // Handle ACK frame - update congestion control
+                self.handleAckFrame(frame) catch {};
+            },
+            .ping => {
+                // Respond to ping with pong
+                try self.sendPong();
+            },
+            .padding => {
+                // Padding frames are ignored
+            },
+            .crypto => {
+                // Handle crypto frame for handshake
+                try self.handleCryptoFrame(frame);
+            },
+            .new_connection_id => {
+                // Handle new connection ID
+                try self.handleNewConnectionId(frame);
+            },
+            .retire_connection_id => {
+                // Handle retire connection ID
+                try self.handleRetireConnectionId(frame);
             },
             else => {
-                // Handle other frame types
+                // Log unhandled frame types
+                std.log.warn("Unhandled QUIC frame type: {}", .{frame.frame_type});
             },
         }
     }
@@ -489,6 +576,8 @@ pub const QuicConnection = struct {
             .data = &[_]u8{},
             .stream_id = 0,
             .fin = false,
+            .max_data = null,
+            .max_stream_data = null,
         };
         
         const packet = try self.quic_conn.createPacket(&[_]zquic.Frame{close_frame});
@@ -496,6 +585,124 @@ pub const QuicConnection = struct {
         
         _ = self.packets_sent.fetchAdd(1, .seq_cst);
         _ = self.bytes_sent.fetchAdd(packet.len, .seq_cst);
+    }
+    
+    fn handleAckFrame(self: *QuicConnection, frame: zquic.Frame) !void {
+        // Update RTT and congestion control based on ACK
+        const now = std.time.timestamp();
+        
+        // Extract ACK information from frame data
+        if (frame.data.len >= 8) {
+            const ack_delay = std.mem.readInt(u64, frame.data[0..8], .big);
+            
+            // Calculate RTT (simplified)
+            const rtt = now - @as(i64, @intCast(ack_delay));
+            
+            // Update connection statistics
+            if (rtt > 0) {
+                // Simplified RTT smoothing
+                const current_rtt = @as(u32, @intCast(@min(rtt, std.math.maxInt(u32))));
+                
+                // Update congestion window based on ACK (simplified CUBIC)
+                self.updateCongestionWindow(current_rtt);
+            }
+        }
+        
+        // Remove acknowledged packets from retransmission queue
+        // (In real implementation, would track sent packets)
+    }
+    
+    fn updateCongestionWindow(self: *QuicConnection, rtt: u32) void {
+        _ = self;
+        _ = rtt;
+        // Simplified congestion control - would implement CUBIC or BBR
+        // For now, just track the RTT
+    }
+    
+    fn sendPong(self: *QuicConnection) !void {
+        const pong_frame = zquic.Frame{
+            .frame_type = .pong,
+            .error_code = null,
+            .reason_phrase = "",
+            .data = &[_]u8{},
+            .stream_id = 0,
+            .fin = false,
+            .max_data = null,
+            .max_stream_data = null,
+        };
+        
+        const packet = try self.quic_conn.createPacket(&[_]zquic.Frame{pong_frame});
+        _ = try self.socket.sendTo(packet, self.remote_addr);
+        
+        _ = self.packets_sent.fetchAdd(1, .seq_cst);
+        _ = self.bytes_sent.fetchAdd(packet.len, .seq_cst);
+    }
+    
+    fn handleCryptoFrame(self: *QuicConnection, frame: zquic.Frame) !void {
+        // Process TLS handshake data from crypto frame
+        if (self.state == .handshaking) {
+            // Forward crypto data to TLS handshake handler
+            // In real implementation, would integrate with handshake manager
+            
+            if (frame.data.len > 0) {
+                // Validate crypto frame structure
+                if (frame.data.len < 4) return error.InvalidCryptoFrame;
+                
+                const crypto_length = std.mem.readInt(u32, frame.data[0..4], .big);
+                if (crypto_length + 4 > frame.data.len) return error.InvalidCryptoLength;
+                
+                const crypto_data = frame.data[4..4 + crypto_length];
+                
+                // Process handshake data (simplified)
+                
+                // If handshake is complete, transition to established
+                if (self.isHandshakeComplete(crypto_data)) {
+                    self.state = .established;
+                    self.updateActivity();
+                }
+            }
+        }
+    }
+    
+    fn isHandshakeComplete(self: *QuicConnection, crypto_data: []const u8) bool {
+        _ = self;
+        // Check if crypto data indicates handshake completion
+        // In real implementation, would check TLS finished message
+        return crypto_data.len > 0 and crypto_data[0] == 0x14; // TLS Finished message type
+    }
+    
+    fn handleNewConnectionId(self: *QuicConnection, frame: zquic.Frame) !void {
+        // Handle new connection ID for connection migration
+        if (frame.data.len >= 21) { // sequence + length + conn_id + token
+            const sequence = std.mem.readInt(u64, frame.data[0..8], .big);
+            const length = frame.data[8];
+            
+            if (length <= 20 and frame.data.len >= 9 + length + 16) {
+                const conn_id = frame.data[9..9 + length];
+                const stateless_reset_token = frame.data[9 + length..9 + length + 16];
+                
+                // Store new connection ID for migration
+                _ = sequence;
+                _ = conn_id;
+                _ = stateless_reset_token;
+                
+                // In real implementation, would store in connection ID map
+                self.updateActivity();
+            }
+        }
+    }
+    
+    fn handleRetireConnectionId(self: *QuicConnection, frame: zquic.Frame) !void {
+        // Handle retire connection ID
+        if (frame.data.len >= 8) {
+            const sequence = std.mem.readInt(u64, frame.data[0..8], .big);
+            
+            // Remove connection ID from active set
+            _ = sequence;
+            
+            // In real implementation, would remove from connection ID map
+            self.updateActivity();
+        }
     }
     
     fn updateActivity(self: *QuicConnection) void {
@@ -506,6 +713,50 @@ pub const QuicConnection = struct {
         const last = self.last_activity.load(.seq_cst);
         const now = std.time.timestamp();
         return (now - last) > @as(i64, @intCast(self.config.idle_timeout));
+    }
+    
+    fn create0RTTPacket(self: *QuicConnection, buffer: []u8) ![]u8 {
+        if (!self.config.enable_0rtt) {
+            return buffer[0..0];
+        }
+        
+        // Check if we have cached session data
+        // In real implementation, would check session cache
+        
+        // For now, prepare early data packet structure
+        var packet_len: usize = 0;
+        
+        // Add 0-RTT packet header
+        buffer[0] = 0x7d; // 0-RTT packet type
+        packet_len += 1;
+        
+        // Add connection ID
+        @memcpy(buffer[packet_len..packet_len + 20], &self.connection_id);
+        packet_len += 20;
+        
+        // Add any buffered early data
+        if (self.early_data_buffer.items.len > 0) {
+            const data_len = @min(self.early_data_buffer.items.len, buffer.len - packet_len - 16);
+            @memcpy(buffer[packet_len..packet_len + data_len], self.early_data_buffer.items[0..data_len]);
+            packet_len += data_len;
+            
+            // Mark early data as sent
+            self.early_data_accepted = true;
+        }
+        
+        return buffer[0..packet_len];
+    }
+    
+    pub fn sendEarlyData(self: *QuicConnection, data: []const u8) !void {
+        if (!self.config.enable_0rtt) {
+            return error.EarlyDataNotEnabled;
+        }
+        
+        if (self.state != .initial and self.state != .handshaking) {
+            return error.InvalidState;
+        }
+        
+        try self.early_data_buffer.appendSlice(data);
     }
     
     // Transport interface implementations

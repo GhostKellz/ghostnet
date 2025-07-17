@@ -170,6 +170,20 @@ pub const WireGuardConfig = struct {
     enable_roaming: bool = true,
 };
 
+pub fn ArrayHashContext(comptime T: type) type {
+    return struct {
+        pub fn hash(self: @This(), key: T) u64 {
+            _ = self;
+            return std.hash_map.hashString(std.mem.asBytes(&key));
+        }
+        
+        pub fn eql(self: @This(), a: T, b: T) bool {
+            _ = self;
+            return std.mem.eql(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
+        }
+    };
+}
+
 pub const WireGuardTunnel = struct {
     allocator: std.mem.Allocator,
     runtime: *zsync.Runtime,
@@ -183,20 +197,6 @@ pub const WireGuardTunnel = struct {
     stats: TunnelStats,
     mutex: std.Thread.Mutex,
     running: std.atomic.Value(bool),
-    
-    pub fn ArrayHashContext(comptime T: type) type {
-        return struct {
-            pub fn hash(self: @This(), key: T) u64 {
-                _ = self;
-                return std.hash_map.hashString(std.mem.asBytes(&key));
-            }
-            
-            pub fn eql(self: @This(), a: T, b: T) bool {
-                _ = self;
-                return std.mem.eql(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
-            }
-        };
-    }
     
     pub const TunInterface = struct {
         name: []const u8,
@@ -360,6 +360,8 @@ pub const WireGuardTunnel = struct {
         keepalives_sent: std.atomic.Value(u64),
         keepalives_received: std.atomic.Value(u64),
         errors: std.atomic.Value(u64),
+        rate_limited: std.atomic.Value(u64),
+        cookies_sent: std.atomic.Value(u64),
         
         pub fn init() TunnelStats {
             return .{
@@ -372,7 +374,109 @@ pub const WireGuardTunnel = struct {
                 .keepalives_sent = std.atomic.Value(u64).init(0),
                 .keepalives_received = std.atomic.Value(u64).init(0),
                 .errors = std.atomic.Value(u64).init(0),
+                .rate_limited = std.atomic.Value(u64).init(0),
+                .cookies_sent = std.atomic.Value(u64).init(0),
             };
+        }
+    };
+    
+    pub const RateLimiter = struct {
+        buckets: std.AutoHashMap(transport.Address, TokenBucket),
+        allocator: std.mem.Allocator,
+        
+        pub const TokenBucket = struct {
+            tokens: f64,
+            last_refill: i64,
+            max_tokens: f64,
+            refill_rate: f64,
+        };
+        
+        pub fn init(allocator: std.mem.Allocator) RateLimiter {
+            return .{
+                .buckets = std.AutoHashMap(transport.Address, TokenBucket).init(allocator),
+                .allocator = allocator,
+            };
+        }
+        
+        pub fn deinit(self: *RateLimiter) void {
+            self.buckets.deinit();
+        }
+        
+        pub fn checkRate(self: *RateLimiter, addr: transport.Address, max_rate: f64) !bool {
+            const now = std.time.timestamp();
+            
+            if (self.buckets.getPtr(addr)) |bucket| {
+                // Refill tokens based on time elapsed
+                const elapsed = @as(f64, @floatFromInt(now - bucket.last_refill));
+                bucket.tokens = @min(bucket.max_tokens, bucket.tokens + (elapsed * bucket.refill_rate));
+                bucket.last_refill = now;
+                
+                if (bucket.tokens >= 1.0) {
+                    bucket.tokens -= 1.0;
+                    return true;
+                }
+                return false;
+            } else {
+                // Create new bucket
+                try self.buckets.put(addr, .{
+                    .tokens = max_rate - 1.0,
+                    .last_refill = now,
+                    .max_tokens = max_rate,
+                    .refill_rate = max_rate,
+                });
+                return true;
+            }
+        }
+    };
+    
+    pub const CookieJar = struct {
+        cookies: std.AutoHashMap(transport.Address, Cookie),
+        allocator: std.mem.Allocator,
+        
+        pub const Cookie = struct {
+            value: [16]u8,
+            timestamp: i64,
+            nonce: [24]u8,
+        };
+        
+        pub fn init(allocator: std.mem.Allocator) CookieJar {
+            return .{
+                .cookies = std.AutoHashMap(transport.Address, Cookie).init(allocator),
+                .allocator = allocator,
+            };
+        }
+        
+        pub fn deinit(self: *CookieJar) void {
+            self.cookies.deinit();
+        }
+        
+        pub fn generateCookie(self: *CookieJar, addr: transport.Address, secret: [32]u8) ![16]u8 {
+            var cookie: [16]u8 = undefined;
+            var nonce: [24]u8 = undefined;
+            std.crypto.random.bytes(&nonce);
+            
+            // Create cookie based on address and secret
+            var hasher = std.crypto.hash.blake3.Blake3.init(.{});
+            hasher.update(&secret);
+            hasher.update(std.mem.asBytes(&addr));
+            hasher.update(&nonce);
+            hasher.final(&cookie);
+            
+            try self.cookies.put(addr, .{
+                .value = cookie,
+                .timestamp = std.time.timestamp(),
+                .nonce = nonce,
+            });
+            
+            return cookie;
+        }
+        
+        pub fn validateCookie(self: *CookieJar, addr: transport.Address, cookie: [16]u8, timeout: i64) bool {
+            if (self.cookies.get(addr)) |stored_cookie| {
+                const age = std.time.timestamp() - stored_cookie.timestamp;
+                return age < timeout and std.mem.eql(u8, &stored_cookie.value, &cookie);
+            }
+            return false;
         }
     };
     
@@ -391,6 +495,8 @@ pub const WireGuardTunnel = struct {
             .routing_table = RoutingTable.init(allocator),
             .packet_queue = PacketQueue.init(allocator),
             .stats = TunnelStats.init(),
+            .rate_limiter = RateLimiter.init(allocator),
+            .cookie_jar = CookieJar.init(allocator),
             .mutex = .{},
             .running = std.atomic.Value(bool).init(false),
         };
@@ -419,6 +525,8 @@ pub const WireGuardTunnel = struct {
         
         self.routing_table.deinit();
         self.packet_queue.deinit();
+        self.rate_limiter.deinit();
+        self.cookie_jar.deinit();
         self.socket.close();
         
         self.allocator.destroy(self);
@@ -712,6 +820,19 @@ pub const WireGuardTunnel = struct {
     fn handleUdpPacket(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
         if (data.len < 4) return error.PacketTooSmall;
         
+        // Rate limiting check
+        const rate_allowed = self.rate_limiter.checkRate(sender_addr, @as(f64, @floatFromInt(self.config.rate_limit_packets_per_second))) catch false;
+        if (!rate_allowed) {
+            _ = self.stats.rate_limited.fetchAdd(1, .seq_cst);
+            
+            // Send cookie challenge for handshake initiation under load
+            const message_type: MessageType = @enumFromInt(data[0]);
+            if (message_type == .handshake_initiation) {
+                try self.sendCookieReply(sender_addr);
+            }
+            return;
+        }
+        
         const message_type: MessageType = @enumFromInt(data[0]);
         
         switch (message_type) {
@@ -800,17 +921,149 @@ pub const WireGuardTunnel = struct {
         return @as(u32, @intCast(std.time.timestamp() & 0xFFFFFFFF));
     }
     
-    fn sendKeepalive(self: *WireGuardTunnel, peer_id: u32) !void {
+    fn sendCookieReply(self: *WireGuardTunnel, addr: transport.Address) !void {
+        // Generate cookie for this address
+        const cookie = try self.cookie_jar.generateCookie(addr, self.config.cookie_secret);
+        
+        // Encrypt cookie
+        var encrypted_cookie: [32]u8 = undefined;
+        try self.encryptCookie(&encrypted_cookie, &cookie, addr);
+        
+        var cookie_reply = CookieReply{
+            .receiver = 0, // Would be set from original message
+            .nonce = undefined,
+            .encrypted_cookie = encrypted_cookie,
+        };
+        
+        std.crypto.random.bytes(&cookie_reply.nonce);
+        
+        const packet = try self.serializeCookieReply(&cookie_reply);
+        defer self.allocator.free(packet);
+        
+        _ = try self.socket.sendTo(packet, addr);
+        _ = self.stats.cookies_sent.fetchAdd(1, .seq_cst);
+    }
+    
+    fn encryptCookie(self: *WireGuardTunnel, output: *[32]u8, cookie: *const [16]u8, addr: transport.Address) !void {
+        _ = self;
+        // XChaCha20Poly1305 encryption of cookie using address-derived key
+        var key: [32]u8 = undefined;
+        var hasher = std.crypto.hash.blake3.Blake3.init(.{});
+        hasher.update(std.mem.asBytes(&addr));
+        hasher.final(&key);
+        
+        var nonce: [24]u8 = undefined;
+        std.crypto.random.bytes(&nonce);
+        
+        try zcrypto.chacha20poly1305.encrypt(output, cookie, &key, &nonce[0..12]);
+    }
+    
+    fn decryptCookie(self: *WireGuardTunnel, output: *[16]u8, encrypted: *const [32]u8, addr: transport.Address) !void {
+        _ = self;
+        // XChaCha20Poly1305 decryption of cookie
+        var key: [32]u8 = undefined;
+        var hasher = std.crypto.hash.blake3.Blake3.init(.{});
+        hasher.update(std.mem.asBytes(&addr));
+        hasher.final(&key);
+        
+        var nonce: [24]u8 = undefined;
+        std.crypto.random.bytes(&nonce);
+        
+        try zcrypto.chacha20poly1305.decrypt(output, encrypted, &key, &nonce[0..12]);
+    }
+    
+    fn sendKeepaliveById(self: *WireGuardTunnel, peer_id: u32) !void {
         _ = peer_id;
         // Send keepalive packet
         _ = self.stats.keepalives_sent.fetchAdd(1, .seq_cst);
     }
     
     fn handleHandshakeResponse(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
-        _ = self;
-        _ = data;
-        _ = sender_addr;
-        // Handle handshake response
+        if (data.len < 92) return error.InvalidMessageLength; // Min handshake response size
+        
+        const response = try self.deserializeHandshakeResponse(data);
+        
+        // Validate MACs
+        if (!try self.validateMAC1(&response.mac1, data[0..data.len - 32])) {
+            return error.InvalidMAC;
+        }
+        
+        // Validate MAC2 if present (cookie mechanism)
+        if (response.mac2) |mac2| {
+            if (!try self.validateMAC2(&mac2, data[0..data.len - 16], sender_addr)) {
+                return error.InvalidCookie;
+            }
+        }
+        
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        // Find peer by receiver ID (our sender ID from initiation)
+        const peer = self.peers.get(response.receiver) orelse return error.PeerNotFound;
+        
+        if (peer.handshake_state != .initiation_sent) {
+            return error.UnexpectedHandshakeResponse;
+        }
+        
+        // Verify the response is from the correct peer
+        if (!std.mem.eql(u8, &peer.endpoint.in.sa.addr, &sender_addr.in.sa.addr)) {
+            if (!self.config.enable_roaming) {
+                return error.EndpointMismatch;
+            }
+            // Update peer endpoint for roaming
+            peer.endpoint = sender_addr;
+        }
+        
+        // Get our ephemeral private key from the handshake state
+        const our_ephemeral_private = peer.session_key orelse return error.MissingEphemeralKey;
+        
+        // Perform Noise XX key exchange steps:
+        // 1. DH(ephemeral_private, response.ephemeral)
+        const dh1 = try KeyPair.computeSharedSecret(our_ephemeral_private, response.ephemeral);
+        
+        // 2. DH(ephemeral_private, peer.public_key) 
+        const dh2 = try KeyPair.computeSharedSecret(our_ephemeral_private, peer.public_key);
+        
+        // 3. DH(private_key, response.ephemeral)
+        const dh3 = try KeyPair.computeSharedSecret(self.config.private_key, response.ephemeral);
+        
+        // Derive transport keys using HKDF
+        var transport_keys: [64]u8 = undefined;
+        try self.deriveTransportKeys(&transport_keys, &dh1, &dh2, &dh3, peer.preshared_key);
+        
+        // Split into sending and receiving keys
+        peer.sending_key = transport_keys[0..32].*;
+        peer.receiving_key = transport_keys[32..64].*;
+        
+        // Decrypt and verify the empty payload (contains timestamp)
+        if (response.encrypted_empty.len >= 16) {
+            var decrypted: [16]u8 = undefined;
+            try self.decryptHandshakePayload(&decrypted, &response.encrypted_empty, &peer.receiving_key.?);
+            
+            // Verify timestamp to prevent replay attacks
+            const timestamp = std.mem.readInt(i64, decrypted[0..8], .little);
+            const now = std.time.timestamp();
+            if (@abs(now - timestamp) > 60) { // 60 second tolerance
+                return error.TimestampTooOld;
+            }
+        }
+        
+        // Complete handshake
+        peer.handshake_state = .established;
+        peer.last_handshake = std.time.timestamp();
+        peer.last_activity.store(std.time.timestamp(), .seq_cst);
+        
+        // Reset packet counters for new session
+        peer.receiving_counter.store(0, .seq_cst);
+        peer.sending_counter.store(0, .seq_cst);
+        
+        // Clear session key (it was temporary storage for ephemeral key)
+        peer.session_key = null;
+        
+        _ = self.stats.handshakes_completed.fetchAdd(1, .seq_cst);
+        
+        // Send keepalive to confirm the tunnel is ready
+        try self.sendKeepalive(peer);
     }
     
     fn handleKeepalive(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
@@ -820,10 +1073,91 @@ pub const WireGuardTunnel = struct {
     }
     
     fn handleCookieReply(self: *WireGuardTunnel, data: []const u8, sender_addr: transport.Address) !void {
+        const cookie_reply = try self.deserializeCookieReply(data);
+        
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        // Decrypt and validate cookie
+        var cookie: [16]u8 = undefined;
+        try self.decryptCookie(&cookie, &cookie_reply.encrypted_cookie, sender_addr);
+        
+        // Store cookie for this peer endpoint
+        if (self.peer_addresses.get(sender_addr)) |peer_id| {
+            if (self.peers.get(peer_id)) |peer| {
+                // Cookie stored in peer metadata (simplified)
+                _ = peer;
+            }
+        }
+    }
+    
+    fn deriveTransportKeys(self: *WireGuardTunnel, output: *[64]u8, dh1: *const [32]u8, dh2: *const [32]u8, dh3: *const [32]u8, psk: ?[32]u8) !void {
         _ = self;
+        
+        // Concatenate all DH results
+        var key_material: [96]u8 = undefined;
+        @memcpy(key_material[0..32], dh1);
+        @memcpy(key_material[32..64], dh2);
+        @memcpy(key_material[64..96], dh3);
+        
+        // Include pre-shared key if available
+        if (psk) |preshared| {
+            // XOR the PSK into the key material
+            for (0..32) |i| {
+                key_material[i] ^= preshared[i];
+            }
+        }
+        
+        // Use HKDF to derive final transport keys
+        try zcrypto.hkdf.expand(output, &key_material, "WireGuard v1 transport keys", &[_]u8{});
+    }
+    
+    fn decryptHandshakePayload(self: *WireGuardTunnel, output: []u8, encrypted: []const u8, key: *const [32]u8) !void {
+        _ = self;
+        
+        if (encrypted.len < 16) return error.InvalidPayloadLength;
+        
+        const ciphertext = encrypted[0..encrypted.len - 16];
+        const auth_tag = encrypted[encrypted.len - 16..encrypted.len];
+        
+        // Generate nonce (simplified - should be from handshake state)
+        var nonce: [12]u8 = [_]u8{0} ** 12;
+        
+        // Verify auth tag
+        var poly_state = zcrypto.poly1305.Poly1305.init(key);
+        poly_state.update(ciphertext);
+        var computed_tag: [16]u8 = undefined;
+        poly_state.final(&computed_tag);
+        
+        if (!std.mem.eql(u8, auth_tag, &computed_tag)) {
+            return error.AuthenticationFailed;
+        }
+        
+        // Decrypt
+        var chacha_state = zcrypto.chacha20.ChaCha20.init(key, &nonce);
+        chacha_state.crypt(output[0..ciphertext.len], ciphertext);
+    }
+    
+    fn validateMAC2(self: *WireGuardTunnel, mac: *const [16]u8, data: []const u8, sender_addr: transport.Address) !bool {
+        _ = self;
+        _ = mac;
         _ = data;
         _ = sender_addr;
-        // Handle cookie reply
+        
+        // Cookie-based MAC validation (simplified)
+        // In real implementation, would use stored cookie for this endpoint
+        return true;
+    }
+    
+    fn sendKeepalive(self: *WireGuardTunnel, peer: *Peer) !void {
+        var keepalive_data: [32]u8 = [_]u8{0} ** 32;
+        keepalive_data[0] = @intFromEnum(MessageType.keepalive);
+        
+        const encrypted = try self.encryptTransportData(&keepalive_data[1..], &[_]u8{}, peer);
+        defer self.allocator.free(encrypted);
+        
+        _ = try self.socket.sendTo(encrypted, peer.endpoint);
+        _ = self.stats.keepalives_sent.fetchAdd(1, .seq_cst);
     }
     
     // Message serialization/deserialization
@@ -846,6 +1180,12 @@ pub const WireGuardTunnel = struct {
         return packet;
     }
     
+    fn deserializeHandshakeResponse(self: *WireGuardTunnel, data: []const u8) !HandshakeResponse {
+        _ = self;
+        if (data.len < 92) return error.PacketTooSmall;
+        return @as(*const HandshakeResponse, @ptrCast(data.ptr)).*;
+    }
+    
     fn deserializeTransportHeader(self: *WireGuardTunnel, data: []const u8) !TransportHeader {
         _ = self;
         if (data.len < 16) return error.PacketTooSmall;
@@ -857,6 +1197,18 @@ pub const WireGuardTunnel = struct {
         std.mem.copy(u8, packet[0..16], std.mem.asBytes(header));
         std.mem.copy(u8, packet[16..], data);
         return packet;
+    }
+    
+    fn serializeCookieReply(self: *WireGuardTunnel, message: *const CookieReply) ![]u8 {
+        const packet = try self.allocator.alloc(u8, 64);
+        std.mem.copy(u8, packet, std.mem.asBytes(message));
+        return packet;
+    }
+    
+    fn deserializeCookieReply(self: *WireGuardTunnel, data: []const u8) !CookieReply {
+        _ = self;
+        if (data.len < 64) return error.PacketTooSmall;
+        return @as(*const CookieReply, @ptrCast(data.ptr)).*;
     }
     
     pub fn getStats(self: *WireGuardTunnel) TunnelStats {
@@ -892,4 +1244,12 @@ const TransportHeader = packed struct {
     reserved: [3]u8 = [_]u8{0} ** 3,
     receiver: u32,
     counter: u64,
+};
+
+const CookieReply = packed struct {
+    type: u8 = @intFromEnum(MessageType.cookie_reply),
+    reserved: [3]u8 = [_]u8{0} ** 3,
+    receiver: u32,
+    nonce: [24]u8,
+    encrypted_cookie: [32]u8,
 };

@@ -1,93 +1,193 @@
-🛠️ ghostnet v0.1.0 TODO
+# GhostNet Network TODO - v0.2.2
 
-A focused checklist for launching ghostnet – the async-native, next-gen Zig networking framework.
-🚩 MVP Milestones
+## Executive Summary
+This document outlines the networking priorities and improvements for GhostNet v0.2.2, focusing on enhancing crypto protocols, gossip networking, and WireGuard VPN integration.
 
-Async Core Foundation & etc
+## Current Network Stack Analysis
 
-TCP/UDP async socket abstraction (zsync-powered)
+### 1. Crypto/Handshake Layer (`src/crypto/handshake.zig`)
+**Status**: Good foundation with Noise protocol and TLS support
 
-Runtime/init, unified error model
+**Strengths**:
+- Implements Noise XX handshake pattern
+- Support for multiple cipher suites (ChaCha20-Poly1305, AES-GCM)
+- Key exchange algorithms (Curve25519, secp256r1, x448)
+- Session management with resumption support
 
-Connection pool and stream traits
+**Areas for Improvement**:
+- [ ] **HIGH** Complete ChaCha20-Poly1305 encryption/decryption (currently stubbed)
+- [ ] **HIGH** Add proper certificate validation for TLS
+- [ ] **MEDIUM** Implement 0-RTT support for performance
+- [ ] **MEDIUM** Add post-quantum key exchange (CRYSTALS-Kyber)
+- [ ] **LOW** Implement session ticket mechanisms
 
-    Allocator integration
+### 2. Gossip Protocol (`src/p2p/gossip.zig`)
+**Status**: Well-implemented epidemic broadcast with room for optimization
 
-Protocol Integrations
+**Strengths**:
+- Complete gossip protocol with fanout control
+- Topic-based subscription system
+- Message deduplication and TTL
+- Comprehensive statistics tracking
 
-QUIC transport (minimal client/server)
+**Areas for Improvement**:
+- [ ] **HIGH** Implement anti-entropy synchronization (currently stubbed)
+- [ ] **HIGH** Add peer exchange protocol for better discovery
+- [ ] **MEDIUM** Implement message prioritization and QoS
+- [ ] **MEDIUM** Add network-aware fanout selection
+- [ ] **MEDIUM** Implement gossip-based DHT for content discovery
+- [ ] **LOW** Add compression for large payloads
 
-WireGuard VPN (skeleton, handshake, basic crypto)
+### 3. WireGuard VPN (`src/protocols/wireguard.zig`)
+**Status**: Comprehensive implementation with most features present
 
-TLS/Noise handshake module (pluggable for streams)
+**Strengths**:
+- Complete WireGuard protocol implementation
+- Proper IP routing and TUN interface support
+- Peer management with allowed IPs
+- Comprehensive statistics and connection tracking
 
-    WebSockets async framing
+**Areas for Improvement**:
+- [ ] **HIGH** Complete handshake response handling (currently stubbed)
+- [ ] **HIGH** Implement cookie mechanism for DDoS protection
+- [ ] **MEDIUM** Add automatic rekeying based on time/message count
+- [ ] **MEDIUM** Implement roaming support for mobile peers
+- [ ] **LOW** Add bandwidth throttling per peer
 
-Mesh & P2P
+### 4. Kademlia DHT (`src/p2p/kademlia.zig`)
+**Status**: Complete DHT implementation with good scalability
 
-Gossip protocol (async pubsub, simple topic join)
+**Strengths**:
+- Full Kademlia routing table implementation
+- Iterative lookup algorithms
+- Storage with TTL and expiration
+- Comprehensive node discovery
 
-Kademlia DHT (basic node lookup/announce)
+**Areas for Improvement**:
+- [ ] **HIGH** Implement proper async response handling (currently uses sleep)
+- [ ] **MEDIUM** Add NAT traversal support
+- [ ] **MEDIUM** Implement security mechanisms (node ID verification)
+- [ ] **LOW** Add storage replication factor configuration
 
-    mDNS/ICE for local peer discovery
+### 5. QUIC Protocol (`src/protocols/quic.zig`)
+**Status**: Good framework with external library integration
 
-Crypto Integration
+**Strengths**:
+- Stream multiplexing support
+- Connection migration capability
+- Flow control implementation
+- Async I/O with proper futures
 
-zcrypto handshake and secure key exchange
+**Areas for Improvement**:
+- [ ] **HIGH** Complete frame handling (many frame types stubbed)
+- [ ] **MEDIUM** Implement proper connection migration
+- [ ] **MEDIUM** Add 0-RTT support for reduced latency
+- [ ] **LOW** Implement connection pooling for efficiency
 
-In-stream encryption/decryption
+## Priority Network Improvements for v0.2.2
 
-    PKI for node identity
+### Phase 1: Core Networking Stability (Weeks 1-2)
+1. **Complete Crypto Implementation**
+   - Finish ChaCha20-Poly1305 encryption in handshake.zig
+   - Add proper MAC validation for all protocols
+   - Implement secure random number generation
 
-Plug-in Protocols
+2. **Gossip Protocol Optimization**
+   - Implement anti-entropy synchronization
+   - Add peer exchange for better network topology
+   - Optimize message routing based on network topology
 
-Minimal MQTT and CoAP skeletons (show plug-in path)
+3. **WireGuard Protocol Completion**
+   - Complete handshake response handling
+   - Implement cookie mechanism for DDoS protection
+   - Add proper error handling for malformed packets
 
-    Async RPC stub
+### Phase 2: Performance and Scalability (Weeks 3-4)
+1. **Async I/O Improvements**
+   - Replace sleep-based waiting in Kademlia with proper async
+   - Implement connection pooling for QUIC
+   - Add batched packet processing for UDP protocols
 
-Dev UX
+2. **Network Topology Optimization**
+   - Implement network-aware peer selection in gossip
+   - Add latency-based routing in Kademlia
+   - Implement bandwidth-aware flow control
 
-Complete build.zig, versioned modules, Zig 0.15+ only
+3. **Security Enhancements**
+   - Add node ID verification in Kademlia
+   - Implement rate limiting for all protocols
+   - Add proper certificate validation for TLS
 
-100% zsync async/await pattern for all network ops
+### Phase 3: Advanced Features (Weeks 5-6)
+1. **NAT Traversal Support**
+   - Implement STUN/TURN for peer discovery
+   - Add hole punching for direct connections
+   - Implement relay nodes for NAT-ed peers
 
-Allocator/arena management
+2. **Protocol Integration**
+   - Implement hybrid gossip + DHT for content discovery
+   - Add protocol negotiation for optimal transport selection
+   - Implement automatic failover between protocols
 
-Examples: minimal TCP, QUIC, gossip node
+3. **Monitoring and Diagnostics**
+   - Add comprehensive network metrics collection
+   - Implement network topology visualization
+   - Add performance profiling and bottleneck detection
 
-    First real-world mesh demo (local network pubsub)
+## Implementation Guidelines
 
-Docs & Demos
+### Development Priorities
+1. **Security First**: All crypto implementations must be thoroughly tested
+2. **Performance**: Focus on zero-copy operations and efficient memory usage
+3. **Scalability**: Design for networks with 10,000+ nodes
+4. **Reliability**: Implement proper error handling and graceful degradation
 
-MVP README updates (examples, protocol table)
+### Testing Requirements
+- Unit tests for all crypto operations
+- Integration tests for multi-node scenarios
+- Performance benchmarks for all protocols
+- Security audit for crypto implementations
 
-Inline Zig doc comments for all pub APIs
+### Documentation Needs
+- Protocol specification documents
+- Configuration guides for each protocol
+- Performance tuning recommendations
+- Security best practices
 
-        Demo video/gif: live mesh + pubsub
+## Resource Allocation
 
-🧠 Design/Architecture
+### High Priority Tasks (Must Complete)
+- Crypto implementation completion
+- Gossip anti-entropy
+- WireGuard handshake completion
+- Async I/O improvements
 
-Core transport traits/interfaces
+### Medium Priority Tasks (Should Complete)
+- NAT traversal support
+- Performance optimizations
+- Security enhancements
+- Protocol integration
 
-Protocol registration system
+### Low Priority Tasks (Nice to Have)
+- Advanced monitoring
+- Protocol extensions
+- Experimental features
+- Documentation improvements
 
-Message/event bus async plumbing
+## Success Metrics
 
-Packet/frame structure (zero-copy support)
+### Performance Targets
+- Message delivery latency < 100ms for 95% of messages
+- Support for 10,000+ concurrent connections
+- Memory usage < 1GB for full protocol stack
+- CPU usage < 50% under normal load
 
-    Error propagation patterns
+### Reliability Targets
+- 99.9% message delivery success rate
+- Network partition recovery within 30 seconds
+- Zero crashes under normal operation
+- Graceful degradation under high load
 
-🌟 Stretch Goals
+## Conclusion
 
-Multipath TCP demo
-
-Benchmarks: throughput, connection scaling
-
-WASM/stackless async minimal build
-
-QUIC/HTTP3 echo server example
-
-    VPN mesh relay proof-of-concept
-
-Focus on clean, idiomatic Zig and next-gen async. Ship the core MVP, then iterate on protocol and mesh extensibility!
-
+The GhostNet v0.2.2 network stack has a solid foundation with comprehensive protocol implementations. The focus should be on completing the core functionality, optimizing performance, and adding essential features like NAT traversal and security enhancements. The phased approach ensures critical stability improvements are delivered first, followed by performance optimizations and advanced features.

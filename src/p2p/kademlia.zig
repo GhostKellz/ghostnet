@@ -527,7 +527,36 @@ pub const KademliaNode = struct {
         message_type: KademliaRpcType,
         target_id: NodeID,
         timestamp: i64,
-        callback: ?*const fn (result: KademliaMessage) void,
+        response_future: zsync.Future(?KademliaMessage),
+        response: ?KademliaMessage,
+        completed: std.atomic.Value(bool),
+        
+        pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, transaction_id: [16]u8, message_type: KademliaRpcType, target_id: NodeID) PendingRequest {
+            _ = allocator;
+            return PendingRequest{
+                .transaction_id = transaction_id,
+                .message_type = message_type,
+                .target_id = target_id,
+                .timestamp = std.time.timestamp(),
+                .response_future = zsync.Future(?KademliaMessage).init(runtime, struct {
+                    request: *PendingRequest,
+                    
+                    pub fn poll(ctx: *@This()) zsync.Poll(?KademliaMessage) {
+                        if (ctx.request.completed.load(.seq_cst)) {
+                            return .{ .ready = ctx.request.response };
+                        }
+                        return .pending;
+                    }
+                }{ .request = undefined }),
+                .response = null,
+                .completed = std.atomic.Value(bool).init(false),
+            };
+        }
+        
+        pub fn complete(self: *PendingRequest, response: ?KademliaMessage) void {
+            self.response = response;
+            self.completed.store(true, .seq_cst);
+        }
     };
     
     pub const TransactionHashContext = struct {
@@ -672,8 +701,21 @@ pub const KademliaNode = struct {
                 active_queries += 1;
             }
             
-            // Wait for responses (simplified - would use proper async handling)
-            std.time.sleep(1000000000); // 1 second
+            // Wait for responses using async futures
+            var response_futures = std.ArrayList(zsync.Future(void)).init(self.allocator);
+            defer response_futures.deinit();
+            
+            for (nodes_to_query.items) |node| {
+                const future = try self.runtime.spawn(waitForResponse, .{ self, node.id }, .normal);
+                try response_futures.append(future);
+            }
+            
+            // Wait for all responses or timeout
+            const timeout_ns = self.config.rpc_timeout * 1000000; // Convert to nanoseconds
+            for (response_futures.items) |future| {
+                _ = self.runtime.awaitTimeout(future, timeout_ns) catch continue;
+            }
+            
             active_queries = 0; // Reset for next iteration
         }
         
@@ -724,10 +766,17 @@ pub const KademliaNode = struct {
         
         try self.sendMessage(&message, node.address);
         
-        // Wait for response (simplified)
-        std.time.sleep(100000000); // 100ms
+        // Wait for response using async future
+        const timeout_ms = self.config.rpc_timeout;
+        const response_future = self.waitForResponse(message.transaction_id, timeout_ms);
         
-        return null; // Would return actual value from response
+        if (try self.runtime.await(response_future)) |response| {
+            if (response.value) |value| {
+                return try self.allocator.dupe(u8, value);
+            }
+        }
+        
+        return null;
     }
     
     pub fn store(self: *KademliaNode, key: []const u8, value: []const u8) !void {
@@ -827,7 +876,8 @@ pub const KademliaNode = struct {
                     }
                 },
                 .pending => {
-                    std.time.sleep(1000000); // 1ms
+                    // Yield to allow other tasks to run
+                    _ = try self.runtime.yield();
                     continue;
                 },
             }
@@ -842,6 +892,11 @@ pub const KademliaNode = struct {
         const sender_contact = NodeContact.init(message.sender_id, sender_addr);
         try self.routing_table.addNode(sender_contact);
         _ = self.stats.nodes_discovered.fetchAdd(1, .seq_cst);
+        
+        // Check if this is a response to a pending request
+        if (self.isResponseMessage(message.message_type)) {
+            self.completePendingRequest(message);
+        }
         
         switch (message.message_type) {
             .ping => {
@@ -1039,6 +1094,73 @@ pub const KademliaNode = struct {
             .routing_table_size = self.routing_table.size(),
             .storage_size = self.storage.count(),
         };
+    }
+    
+    fn isResponseMessage(self: *KademliaNode, message_type: KademliaRpcType) bool {
+        _ = self;
+        return switch (message_type) {
+            .pong, .find_node_response, .find_value_response, .store_response => true,
+            else => false,
+        };
+    }
+    
+    fn completePendingRequest(self: *KademliaNode, message: KademliaMessage) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        if (self.pending_requests.getPtr(message.transaction_id)) |request| {
+            var response_copy = message;
+            // Clone the message for the response
+            response_copy.nodes = self.allocator.dupe(NodeContact, message.nodes) catch &[_]NodeContact{};
+            if (message.key) |key| {
+                response_copy.key = self.allocator.dupe(u8, key) catch null;
+            }
+            if (message.value) |value| {
+                response_copy.value = self.allocator.dupe(u8, value) catch null;
+            }
+            
+            request.complete(response_copy);
+            _ = self.pending_requests.remove(message.transaction_id);
+        }
+    }
+    
+    fn addPendingRequest(self: *KademliaNode, request: PendingRequest) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        
+        try self.pending_requests.put(request.transaction_id, request);
+    }
+    
+    fn waitForResponse(self: *KademliaNode, transaction_id: [16]u8, timeout_ms: u32) zsync.Future(?KademliaMessage) {
+        return zsync.Future(?KademliaMessage).init(self.runtime, struct {
+            node: *KademliaNode,
+            transaction_id: [16]u8,
+            timeout_ms: u32,
+            start_time: i64,
+            
+            pub fn poll(ctx: *@This()) zsync.Poll(?KademliaMessage) {
+                const now = std.time.timestamp();
+                if (now - ctx.start_time > ctx.timeout_ms) {
+                    return .{ .ready = null }; // Timeout
+                }
+                
+                ctx.node.mutex.lock();
+                defer ctx.node.mutex.unlock();
+                
+                if (ctx.node.pending_requests.get(ctx.transaction_id)) |request| {
+                    if (request.completed.load(.seq_cst)) {
+                        return .{ .ready = request.response };
+                    }
+                }
+                
+                return .pending;
+            }
+        }{ 
+            .node = self, 
+            .transaction_id = transaction_id, 
+            .timeout_ms = timeout_ms,
+            .start_time = std.time.timestamp(),
+        });
     }
 };
 

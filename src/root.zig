@@ -48,6 +48,7 @@ pub const QuicConnection = quic.QuicConnection;
 pub const QuicServer = quic.QuicServer;
 pub const QuicClient = quic.QuicClient;
 pub const QuicStream = quic.QuicStream;
+pub const QuicConfig = quic.QuicConfig;
 
 pub const WireGuardTunnel = wireguard.WireGuardTunnel;
 pub const WireGuardConfig = wireguard.WireGuardConfig;

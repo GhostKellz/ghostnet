@@ -304,7 +304,7 @@ pub const QuicConnection = struct {
     allocator: std.mem.Allocator,
     runtime: *zsync.Runtime,
     config: QuicConfig,
-    quic_conn: zquic.Connection,
+    quic_conn: zquic.Connection.Connection,
     socket: udp.UdpSocket,
     state: QuicConnectionState,
     local_addr: transport.Address,

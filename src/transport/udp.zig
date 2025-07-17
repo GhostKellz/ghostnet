@@ -155,7 +155,10 @@ pub const UdpSocket = struct {
     
     pub fn close(self: *UdpSocket) void {
         self.state = .closed;
-        self.socket.close();
+        if (self.socket) |socket| {
+            std.posix.close(socket);
+            self.socket = null;
+        }
     }
     
     pub fn localAddress(self: *UdpSocket) transport.TransportError!transport.Address {

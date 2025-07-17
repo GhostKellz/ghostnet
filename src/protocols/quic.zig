@@ -14,8 +14,8 @@ pub const RingBuffer = struct {
     size: usize,
     allocator: std.mem.Allocator,
     
-    pub fn init(allocator: std.mem.Allocator, capacity: usize) !RingBuffer {
-        const buffer = try allocator.alloc(u8, capacity);
+    pub fn init(allocator: std.mem.Allocator, buffer_capacity: usize) !RingBuffer {
+        const buffer = try allocator.alloc(u8, buffer_capacity);
         return RingBuffer{
             .buffer = buffer,
             .read_pos = 0,

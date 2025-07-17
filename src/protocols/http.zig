@@ -948,8 +948,6 @@ pub const HttpClient = struct {
         // Parse URL
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const host = uri.host orelse return error.MissingHost;
-        const port = uri.port orelse if (std.mem.eql(u8, uri.scheme, "https")) 443 else 80;
-        const is_https = std.mem.eql(u8, uri.scheme, "https");
         
         // Protocol selection - HTTP/3 first!
         var selected_protocol = self.selectProtocol(host);

@@ -372,13 +372,13 @@ pub const UdpSocket = struct {
         const c = std.c;
         
         // Prepare mmsghdr structures for batch receive
-        var msgvec = try self.allocator.alloc(c.mmsghdr, packets.len);
+        const msgvec = try self.allocator.alloc(c.mmsghdr, packets.len);
         defer self.allocator.free(msgvec);
         
-        var iovecs = try self.allocator.alloc(c.iovec, packets.len);
+        const iovecs = try self.allocator.alloc(c.iovec, packets.len);
         defer self.allocator.free(iovecs);
         
-        var sockaddrs = try self.allocator.alloc(c.sockaddr_storage, packets.len);
+        const sockaddrs = try self.allocator.alloc(c.sockaddr_storage, packets.len);
         defer self.allocator.free(sockaddrs);
         
         // Initialize structures
@@ -436,13 +436,13 @@ pub const UdpSocket = struct {
         const c = std.c;
         
         // Prepare mmsghdr structures for batch send
-        var msgvec = try self.allocator.alloc(c.mmsghdr, packets.len);
+        const msgvec = try self.allocator.alloc(c.mmsghdr, packets.len);
         defer self.allocator.free(msgvec);
         
-        var iovecs = try self.allocator.alloc(c.iovec, packets.len);
+        const iovecs = try self.allocator.alloc(c.iovec, packets.len);
         defer self.allocator.free(iovecs);
         
-        var sockaddrs = try self.allocator.alloc(c.sockaddr_storage, packets.len);
+        const sockaddrs = try self.allocator.alloc(c.sockaddr_storage, packets.len);
         defer self.allocator.free(sockaddrs);
         
         // Initialize structures

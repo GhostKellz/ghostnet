@@ -26,7 +26,7 @@ pub const ConnectionInfo = struct {
 
 pub const ConnectionPool = struct {
     allocator: std.mem.Allocator,
-    runtime: *zsync.Runtime,
+    io: zsync.ThreadPoolIo,
     config: PoolConfig,
     connections: std.ArrayList(ConnectionInfo),
     idle_connections: std.ArrayList(*ConnectionInfo),
@@ -46,13 +46,13 @@ pub const ConnectionPool = struct {
         successful_connections: std.atomic.Value(u64),
     };
     
-    pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime, config: PoolConfig) !*ConnectionPool {
+    pub fn init(allocator: std.mem.Allocator, config: PoolConfig) !*ConnectionPool {
         const pool = try allocator.create(ConnectionPool);
         errdefer allocator.destroy(pool);
         
         pool.* = .{
             .allocator = allocator,
-            .runtime = runtime,
+            .io = try zsync.ThreadPoolIo.init(allocator, .{}),
             .config = config,
             .connections = std.ArrayList(ConnectionInfo).init(allocator),
             .idle_connections = std.ArrayList(*ConnectionInfo).init(allocator),
@@ -72,7 +72,7 @@ pub const ConnectionPool = struct {
         };
         
         if (config.enable_health_checks) {
-            _ = try pool.runtime.spawn(healthCheckLoop, .{pool}, .normal);
+            _ = pool.io.async(healthCheckLoop, .{pool});
         }
         
         return pool;
@@ -100,6 +100,9 @@ pub const ConnectionPool = struct {
         self.address_pools.deinit();
         
         self.mutex.unlock();
+        
+        // Clean up zsync IO
+        self.io.deinit();
         
         self.allocator.destroy(self);
     }
@@ -151,30 +154,31 @@ pub const ConnectionPool = struct {
         return error.PoolExhausted;
     }
     
-    pub fn acquireAsync(self: *ConnectionPool, address: transport.Address, options: transport.TransportOptions) zsync.Future {
-        return zsync.Future.init(self.runtime, struct {
+    pub fn acquireAsync(self: *ConnectionPool, address: transport.Address, options: transport.TransportOptions) zsync.Future(transport.TransportError!transport.Connection) {
+        return self.io.async(struct {
             pool: *ConnectionPool,
             addr: transport.Address,
             opts: transport.TransportOptions,
             retry_count: u32 = 0,
             
-            pub fn poll(ctx: *@This()) zsync.Poll(transport.TransportError!transport.Connection) {
+            pub fn run(ctx: @This()) transport.TransportError!transport.Connection {
                 if (ctx.pool.shutdown.load(.seq_cst)) {
-                    return .{ .ready = transport.TransportError!transport.Connection{ error.TransportClosed } };
+                    return error.TransportClosed;
                 }
                 
                 // Try to acquire synchronously first
                 if (ctx.pool.acquire(ctx.addr, ctx.opts)) |conn| {
-                    return .{ .ready = conn };
+                    return conn;
                 } else |err| switch (err) {
                     error.PoolExhausted => {
                         if (ctx.retry_count < ctx.pool.config.max_retries) {
-                            ctx.retry_count += 1;
-                            return .pending;
+                            // For async operation, we would need to implement retry logic differently
+                            // For now, return the error
+                            return error.TooManyConnections;
                         }
-                        return .{ .ready = transport.TransportError!transport.Connection{ error.TooManyConnections } };
+                        return error.TooManyConnections;
                     },
-                    else => return .{ .ready = transport.TransportError!transport.Connection{ errors.mapSystemError(err) } },
+                    else => return errors.mapSystemError(err),
                 }
             }
         }{ .pool = self, .addr = address, .opts = options });
@@ -222,7 +226,6 @@ pub const ConnectionPool = struct {
         // For now, assume TCP
         var tcp_conn = try @import("tcp.zig").TcpConnection.connect(
             self.allocator,
-            self.runtime,
             address,
             options
         );

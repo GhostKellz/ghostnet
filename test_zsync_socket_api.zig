@@ -36,10 +36,10 @@ pub fn main() !void {
         std.debug.print("4. Testing zsync.Io implementations...\n", .{});
         var blocking_io = zsync.BlockingIo.init();
         defer blocking_io.deinit();
-        
+
         var thread_pool_io = try zsync.ThreadPoolIo.init(allocator, .{});
         defer thread_pool_io.deinit();
-        
+
         std.debug.print("   ✅ BlockingIo and ThreadPoolIo work\n", .{});
     }
 

@@ -14,16 +14,16 @@ pub fn main() !void {
         std.debug.print("1. Testing zsync.BlockingIo...\n", .{});
         var blocking_io = zsync.BlockingIo.init();
         defer blocking_io.deinit();
-        
+
         std.debug.print("   ✅ BlockingIo initialized successfully\n", .{});
     }
 
-    // Test 2: ThreadPoolIo for concurrent TCP operations  
+    // Test 2: ThreadPoolIo for concurrent TCP operations
     {
         std.debug.print("2. Testing zsync.ThreadPoolIo...\n", .{});
         var thread_pool_io = try zsync.ThreadPoolIo.init(allocator, .{});
         defer thread_pool_io.deinit();
-        
+
         std.debug.print("   ✅ ThreadPoolIo initialized successfully\n", .{});
     }
 
@@ -32,7 +32,7 @@ pub fn main() !void {
         std.debug.print("3. Testing zsync.GreenThreadsIo...\n", .{});
         var green_threads_io = try zsync.GreenThreadsIo.init(allocator, .{});
         defer green_threads_io.deinit();
-        
+
         std.debug.print("   ✅ GreenThreadsIo initialized successfully\n", .{});
     }
 
@@ -41,11 +41,11 @@ pub fn main() !void {
         std.debug.print("4. Testing TCP socket with zsync...\n", .{});
         var thread_pool_io = try zsync.ThreadPoolIo.init(allocator, .{});
         defer thread_pool_io.deinit();
-        
+
         // Test basic socket creation (without actual networking)
         const socket = try thread_pool_io.socket(.ipv4, .tcp, .tcp);
         try thread_pool_io.close(socket);
-        
+
         std.debug.print("   ✅ TCP socket creation successful\n", .{});
     }
 

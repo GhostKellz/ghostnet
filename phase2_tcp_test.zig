@@ -14,15 +14,15 @@ pub fn main() !void {
 
     // Test 1: TCP Server
     std.debug.print("1. Creating TCP Server...\n", .{});
-    
+
     var tcp_listener = ghostnet.TcpListener.init(allocator) catch |err| {
         std.debug.print("❌ Failed to create TCP listener: {}\n", .{err});
         return;
     };
     defer tcp_listener.deinit();
 
-    const server_address = ghostnet.transport.Address{ 
-        .ipv4 = std.net.Ip4Address.init(.{127, 0, 0, 1}, 0) // Port 0 = any available
+    const server_address = ghostnet.transport.Address{
+        .ipv4 = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 0), // Port 0 = any available
     };
     const server_options = ghostnet.transport.TransportOptions{
         .reuse_address = true,
@@ -45,9 +45,9 @@ pub fn main() !void {
 
     // Test 2: TCP Client
     std.debug.print("2. Creating TCP Client...\n", .{});
-    
+
     const client_address = ghostnet.transport.Address{
-        .ipv4 = std.net.Ip4Address.init(.{127, 0, 0, 1}, 8080) // Connect to port 8080
+        .ipv4 = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 8080), // Connect to port 8080
     };
     const client_options = ghostnet.transport.TransportOptions{
         .reuse_address = false,
@@ -63,7 +63,7 @@ pub fn main() !void {
         std.debug.print("❌ Client connection failed: {}\n", .{err});
         std.debug.print("   This is expected since we don't have a server on port 8080.\n", .{});
         std.debug.print("   The important thing is that our connection code works!\n", .{});
-        
+
         // Continue with other tests even if connection fails
         testConnectionPool(allocator);
         return;
@@ -74,15 +74,15 @@ pub fn main() !void {
 
     // Test 3: Data Exchange
     std.debug.print("3. Testing data exchange...\n", .{});
-    
+
     const test_message = "Hello from ghostnet v0.3.0!";
     const connection = tcp_client.connection();
-    
+
     const bytes_sent = connection.vtable.write(connection.ptr, test_message) catch |err| {
         std.debug.print("❌ Write failed: {}\n", .{err});
         return;
     };
-    
+
     std.debug.print("✅ Sent {} bytes: '{}'\n", .{ bytes_sent, test_message });
 
     var buffer: [1024]u8 = undefined;
@@ -90,7 +90,7 @@ pub fn main() !void {
         std.debug.print("❌ Read failed: {}\n", .{err});
         return;
     };
-    
+
     std.debug.print("✅ Received {} bytes: '{}'\n", .{ bytes_received, buffer[0..bytes_received] });
 
     testConnectionPool(allocator);
@@ -98,7 +98,7 @@ pub fn main() !void {
 
 fn testConnectionPool(allocator: std.mem.Allocator) void {
     std.debug.print("\n4. Testing Connection Pool...\n", .{});
-    
+
     const pool_config = ghostnet.ConnectionPool.PoolConfig{
         .max_connections = 5,
         .max_idle_connections = 2,
@@ -117,7 +117,7 @@ fn testConnectionPool(allocator: std.mem.Allocator) void {
     defer pool.deinit();
 
     std.debug.print("✅ Connection Pool created successfully!\n", .{});
-    
+
     // Test pool stats
     std.debug.print("   Pool stats - Created: {}, Active: {}, Idle: {}\n", .{
         pool.stats.total_created.load(.seq_cst),

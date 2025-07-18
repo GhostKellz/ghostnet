@@ -18,9 +18,9 @@ test "TCP transport basic functionality" {
     // Test transport creation
     var tcp_transport = tcp.TcpTransport.init(allocator, io);
     defer tcp_transport.deinit();
-    
+
     const transport = tcp_transport.transport();
-    
+
     // Test bind
     const bind_addr = transport_mod.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{ 127, 0, 0, 1 }, 0) };
     const options = transport_mod.TransportOptions{
@@ -33,12 +33,12 @@ test "TCP transport basic functionality" {
         .no_delay = true,
         .timeout = 5000,
     };
-    
+
     try transport.bind(bind_addr, options);
-    
+
     // Test local address
     const local_addr = try transport.local_address();
-    
+
     switch (local_addr) {
         .ipv4 => |addr| {
             std.debug.print("Bound to IPv4 address: {}\n", .{addr});
@@ -49,10 +49,10 @@ test "TCP transport basic functionality" {
             try testing.expect(false);
         },
     }
-    
+
     // Test close
     transport.close();
-    
+
     std.debug.print("TCP transport basic functionality test passed\n");
 }
 
@@ -68,16 +68,16 @@ test "TCP transport error handling" {
 
     var tcp_transport = tcp.TcpTransport.init(allocator, io);
     defer tcp_transport.deinit();
-    
+
     const transport = tcp_transport.transport();
-    
+
     // Test local_address without bind should fail
     const result = transport.local_address();
     try testing.expectError(error.NotListening, result);
-    
+
     // Test accept without bind should fail
     const accept_result = transport.accept();
     try testing.expectError(error.NotListening, accept_result);
-    
+
     std.debug.print("TCP transport error handling test passed\n");
 }

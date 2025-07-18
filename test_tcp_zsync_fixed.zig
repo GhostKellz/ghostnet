@@ -14,7 +14,7 @@ pub fn main() !void {
         std.debug.print("1. Testing TcpTransport init...\n", .{});
         var tcp_transport = try ghostnet.TcpTransport.init(allocator);
         defer tcp_transport.deinit();
-        
+
         std.debug.print("   ✅ TcpTransport initialized successfully\n", .{});
     }
 
@@ -23,7 +23,7 @@ pub fn main() !void {
         std.debug.print("2. Testing TcpListener init...\n", .{});
         var tcp_listener = try ghostnet.TcpListener.init(allocator);
         defer tcp_listener.deinit();
-        
+
         std.debug.print("   ✅ TcpListener initialized successfully\n", .{});
     }
 
@@ -32,10 +32,8 @@ pub fn main() !void {
         std.debug.print("3. Testing TcpListener bind...\n", .{});
         var tcp_listener = try ghostnet.TcpListener.init(allocator);
         defer tcp_listener.deinit();
-        
-        const address = ghostnet.transport.Address{ 
-            .ipv4 = std.net.Ip4Address.init(.{127, 0, 0, 1}, 0) 
-        };
+
+        const address = ghostnet.transport.Address{ .ipv4 = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 0) };
         const options = ghostnet.transport.TransportOptions{
             .reuse_address = true,
             .reuse_port = false,
@@ -45,12 +43,12 @@ pub fn main() !void {
             .send_buffer_size = null,
             .backlog = 128,
         };
-        
+
         tcp_listener.bind(address, options) catch |err| {
             std.debug.print("   ⚠️  Bind failed (expected if zsync API differs): {}\n", .{err});
             return;
         };
-        
+
         std.debug.print("   ✅ TcpListener bind successful\n", .{});
     }
 

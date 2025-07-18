@@ -167,7 +167,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_zquic_test = b.addRunArtifact(zquic_test);
 
     // Create TCP/UDP fixes test
@@ -182,7 +182,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_tcp_udp_test = b.addRunArtifact(tcp_udp_test);
 
     // Create TCP transport test
@@ -197,7 +197,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_tcp_transport_test = b.addRunArtifact(tcp_transport_test);
 
     // Create zsync API test
@@ -212,7 +212,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_zsync_api_test = b.addRunArtifact(zsync_api_test);
 
     // TCP zsync integration test
@@ -240,7 +240,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_echo_server = b.addRunArtifact(echo_server_exe);
     const echo_server_step = b.step("echo-server", "Run TCP Echo Server example");
     echo_server_step.dependOn(&run_echo_server.step);
@@ -258,10 +258,62 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_phase2_test = b.addRunArtifact(phase2_test_exe);
     const phase2_test_step = b.step("phase2-test", "Run Phase 2 architecture validation");
-    phase2_test_step.dependOn(&run_phase2_test.step);
+    phase2_test_step.dependOn(&run_phase2_test.step);    // Phase 2 TCP Server
+    const phase2_tcp_server_exe = b.addExecutable(.{
+        .name = "phase2_tcp_server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("phase2_tcp_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_phase2_tcp_server = b.addRunArtifact(phase2_tcp_server_exe);
+    const phase2_tcp_server_step = b.step("tcp-server", "Run Phase 2 TCP Server");
+    phase2_tcp_server_step.dependOn(&run_phase2_tcp_server.step);
+
+    // Phase 2 TCP Client
+    const phase2_tcp_client_exe = b.addExecutable(.{
+        .name = "phase2_tcp_client",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("phase2_tcp_client.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_phase2_tcp_client = b.addRunArtifact(phase2_tcp_client_exe);
+    const phase2_tcp_client_step = b.step("tcp-client", "Run Phase 2 TCP Client");
+    phase2_tcp_client_step.dependOn(&run_phase2_tcp_client.step);
+
+    // Phase 2 Complete TCP Test
+    const phase2_complete_test_exe = b.addExecutable(.{
+        .name = "phase2_complete_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("phase2_complete_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+            },
+        }),
+    });
+    
+    const run_phase2_complete_test = b.addRunArtifact(phase2_complete_test_exe);
+    const phase2_complete_test_step = b.step("tcp-complete", "Run complete TCP communication test");
+    phase2_complete_test_step.dependOn(&run_phase2_complete_test.step);
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will

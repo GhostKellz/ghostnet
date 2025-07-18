@@ -16,17 +16,17 @@ pub fn main() !void {
 
     // Test 1: Basic Transport Layer
     std.debug.print("✅ Test 1: Transport Layer Components\n", .{});
-    
+
     // Test basic TCP transport initialization
     var tcp_transport = try ghostnet.TcpTransport.init(allocator);
     defer tcp_transport.deinit();
     std.debug.print("   ✅ TcpTransport initialization successful\n", .{});
-    
+
     // Test basic UDP socket initialization
     var udp_socket = try ghostnet.UdpSocket.init(allocator);
     defer udp_socket.deinit();
     std.debug.print("   ✅ UdpSocket initialization successful\n", .{});
-    
+
     // Test connection pool initialization
     var pool = try ghostnet.ConnectionPool.init(allocator, .{
         .max_connections = 100,
@@ -36,9 +36,9 @@ pub fn main() !void {
     });
     defer pool.deinit();
     std.debug.print("   ✅ ConnectionPool initialization successful\n", .{});
-    
+
     std.debug.print("\n✅ Test 2: zsync v0.3.2 Integration\n", .{});
-    
+
     // Demonstrate that we can access zsync components
     const zsync = @import("zsync");
     _ = zsync; // Suppress unused warning
@@ -47,30 +47,30 @@ pub fn main() !void {
     std.debug.print("   ✅ zsync.TcpStream available\n", .{});
     std.debug.print("   ✅ zsync.TcpListener available\n", .{});
     std.debug.print("   ✅ zsync.UdpSocket available\n", .{});
-    
+
     std.debug.print("\n✅ Test 3: Error Handling\n", .{});
-    
+
     // Test error types are properly defined
     const transport_errors = ghostnet.transport.TransportError;
     _ = transport_errors; // Suppress unused variable warning
     std.debug.print("   ✅ TransportError enum available\n", .{});
-    
+
     const http_errors = ghostnet.http_errors.HttpError;
     _ = http_errors; // Suppress unused variable warning
     std.debug.print("   ✅ HttpError handling available\n", .{});
-    
+
     std.debug.print("\n✅ Test 4: Protocol Support\n", .{});
-    
+
     // Verify protocol modules are available
     _ = ghostnet.http;
     std.debug.print("   ✅ HTTP protocol module available\n", .{});
-    
+
     _ = ghostnet.websocket;
     std.debug.print("   ✅ WebSocket protocol module available\n", .{});
-    
+
     _ = ghostnet.quic;
     std.debug.print("   ✅ QUIC protocol module available\n", .{});
-    
+
     std.debug.print("\n🎉 Phase 2 Architecture Validation: PASSED\n", .{});
     std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("\n📈 Key Achievements:\n", .{});
@@ -80,13 +80,13 @@ pub fn main() !void {
     std.debug.print("   🏊 Connection pooling with async management\n", .{});
     std.debug.print("   🚨 Comprehensive error handling system\n", .{});
     std.debug.print("   🌐 Multi-protocol support framework\n", .{});
-    
+
     std.debug.print("\n🚀 Ready for Phase 2 Implementation:\n", .{});
     std.debug.print("   ⭐ Real TCP client-server communication\n", .{});
     std.debug.print("   ⭐ Integration test implementations\n", .{});
     std.debug.print("   ⭐ Production-level stability improvements\n", .{});
     std.debug.print("   ⭐ Performance optimization and monitoring\n", .{});
-    
+
     std.debug.print("\n✨ ghostnet v0.3.0 Architecture: PRODUCTION READY ✨\n", .{});
 }
 

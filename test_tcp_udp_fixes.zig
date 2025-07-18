@@ -8,7 +8,7 @@ test "TCP setTcpNoDelay fix" {
     var blocking_io = zsync.BlockingIo.init(testing.allocator);
     defer blocking_io.deinit();
     const io = blocking_io.io();
-    
+
     // Test TCP connection with no_delay option
     const tcp_options = ghostnet.TransportOptions{
         .no_delay = true,
@@ -19,10 +19,10 @@ test "TCP setTcpNoDelay fix" {
         .receive_buffer_size = 8192,
         .timeout = 5000,
     };
-    
+
     // This should not fail due to setTcpNoDelay method missing
-    const result = ghostnet.TcpConnection.connect(testing.allocator, io, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{127, 0, 0, 1}, 80) }, tcp_options);
-    
+    const result = ghostnet.TcpConnection.connect(testing.allocator, io, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{ 127, 0, 0, 1 }, 80) }, tcp_options);
+
     // We expect connection to fail (since no server is listening), but not due to setTcpNoDelay
     // Just check that the method compiles and runs
     if (result) |conn| {
@@ -35,12 +35,12 @@ test "TCP setTcpNoDelay fix" {
 test "UDP sendTo fix - compilation check" {
     // This test only checks that UDP socket types compile correctly
     // and that the sendTo method exists (no actual networking)
-    
+
     const UdpSocketType = ghostnet.UdpSocket;
-    
+
     // Check that the sendTo method exists with the correct signature
     const sendto_fn = @TypeOf(UdpSocketType.sendTo);
     _ = sendto_fn; // Just check that the method exists
-    
+
     // This test passes if the UDP socket types compile without errors
 }

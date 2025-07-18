@@ -14,7 +14,7 @@ pub fn main() !void {
         std.debug.print("1. Testing TcpTransport initialization...\n", .{});
         var tcp_transport = try transport.TcpTransport.init(allocator);
         defer tcp_transport.deinit();
-        
+
         std.debug.print("   ✅ TcpTransport initialized successfully\n", .{});
     }
 
@@ -23,7 +23,7 @@ pub fn main() !void {
         std.debug.print("2. Testing TcpListener initialization...\n", .{});
         var tcp_listener = try transport.TcpListener.init(allocator);
         defer tcp_listener.deinit();
-        
+
         std.debug.print("   ✅ TcpListener initialized successfully\n", .{});
     }
 
@@ -31,14 +31,14 @@ pub fn main() !void {
     {
         std.debug.print("3. Testing TcpConnection structure...\n", .{});
         // We can't test actual connection without a server, but we can test the structure
-        
+
         // Test the socket creation part
         var io = try zsync.ThreadPoolIo.init(allocator, .{});
         defer io.deinit();
-        
+
         const socket = try io.socket(.ipv4, .tcp, .tcp);
         defer io.close(socket) catch {};
-        
+
         std.debug.print("   ✅ TcpConnection structure and socket creation working\n", .{});
     }
 

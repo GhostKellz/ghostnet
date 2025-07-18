@@ -11,14 +11,12 @@ test "TCP Transport with zsync v0.3.2 Integration" {
     var tcp_transport = try ghostnet.TcpTransport.init(allocator);
     defer tcp_transport.deinit();
 
-    // Test TCP listener initialization  
+    // Test TCP listener initialization
     var tcp_listener = try ghostnet.TcpListener.init(allocator);
     defer tcp_listener.deinit();
 
     // Test binding to localhost:0 (any available port)
-    const address = ghostnet.transport.Address{ 
-        .ipv4 = std.net.Ip4Address.init(.{127, 0, 0, 1}, 0) 
-    };
+    const address = ghostnet.transport.Address{ .ipv4 = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 0) };
     const options = ghostnet.transport.TransportOptions{
         .reuse_address = true,
         .reuse_port = false,
@@ -48,9 +46,7 @@ test "UDP Socket with zsync v0.3.2 Integration" {
     defer udp_socket.deinit();
 
     // Test binding to localhost:0 (any available port)
-    const address = ghostnet.transport.Address{ 
-        .ipv4 = std.net.Ip4Address.init(.{127, 0, 0, 1}, 0) 
-    };
+    const address = ghostnet.transport.Address{ .ipv4 = std.net.Ip4Address.init(.{ 127, 0, 0, 1 }, 0) };
     const options = ghostnet.transport.TransportOptions{
         .reuse_address = true,
         .reuse_port = false,
@@ -97,7 +93,7 @@ test "Transport Error Mapping" {
     // Test that our error mapping functions work
     const test_error = error.ConnectionRefused;
     const mapped = ghostnet.errors.mapSystemError(test_error);
-    
+
     // Should not crash and should return a valid transport error
     _ = mapped;
     std.debug.print("✅ Error mapping works!\n", .{});

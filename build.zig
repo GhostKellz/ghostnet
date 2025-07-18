@@ -261,7 +261,7 @@ pub fn build(b: *std.Build) void {
 
     const run_phase2_test = b.addRunArtifact(phase2_test_exe);
     const phase2_test_step = b.step("phase2-test", "Run Phase 2 architecture validation");
-    phase2_test_step.dependOn(&run_phase2_test.step);    // Phase 2 TCP Server
+    phase2_test_step.dependOn(&run_phase2_test.step); // Phase 2 TCP Server
     const phase2_tcp_server_exe = b.addExecutable(.{
         .name = "phase2_tcp_server",
         .root_module = b.createModule(.{
@@ -274,7 +274,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_phase2_tcp_server = b.addRunArtifact(phase2_tcp_server_exe);
     const phase2_tcp_server_step = b.step("tcp-server", "Run Phase 2 TCP Server");
     phase2_tcp_server_step.dependOn(&run_phase2_tcp_server.step);
@@ -292,7 +292,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_phase2_tcp_client = b.addRunArtifact(phase2_tcp_client_exe);
     const phase2_tcp_client_step = b.step("tcp-client", "Run Phase 2 TCP Client");
     phase2_tcp_client_step.dependOn(&run_phase2_tcp_client.step);
@@ -310,7 +310,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    
+
     const run_phase2_complete_test = b.addRunArtifact(phase2_complete_test_exe);
     const phase2_complete_test_step = b.step("tcp-complete", "Run complete TCP communication test");
     phase2_complete_test_step.dependOn(&run_phase2_complete_test.step);

@@ -54,7 +54,7 @@ fn testEchoMessages(stream: ghostnet.zsync.TcpStream, io: ghostnet.zsync.Io) !vo
         std.debug.print("❌ Failed to read welcome message: {}\n", .{err});
         return;
     };
-    
+
     if (welcome_bytes > 0) {
         const welcome_msg = buffer[0..welcome_bytes];
         std.debug.print("📨 Server welcome: {s}", .{welcome_msg});
@@ -63,7 +63,7 @@ fn testEchoMessages(stream: ghostnet.zsync.TcpStream, io: ghostnet.zsync.Io) !vo
     // Test messages to send
     const test_messages = [_][]const u8{
         "Hello ghostnet!\n",
-        "Testing real TCP communication\n", 
+        "Testing real TCP communication\n",
         "Phase 2 working perfectly!\n",
         "zsync + ghostnet = success!\n",
     };

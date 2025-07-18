@@ -24,7 +24,7 @@ pub fn main() !void {
     const tcp_listener = listener_result catch |err| {
         std.debug.print("   ⚠️  Bind failed (expected if port in use): {}\n", .{err});
         std.debug.print("   ✅ Server creation logic is working correctly\n", .{});
-        
+
         // Continue with other tests even if bind fails
         try testClientCapability(allocator);
         return;
@@ -33,7 +33,7 @@ pub fn main() !void {
     std.debug.print("   ✅ TCP listener created and bound successfully!\n", .{});
     std.debug.print("   ✅ Server ready to accept connections\n", .{});
 
-    // Test 2: Verify client creation capability  
+    // Test 2: Verify client creation capability
     try testClientCapability(allocator);
 
     // Test 3: Demonstrate connection handling
@@ -63,15 +63,15 @@ pub fn main() !void {
 
 fn testClientCapability(allocator: std.mem.Allocator) !void {
     std.debug.print("\n✅ Test 2: TCP Client Connection Capability\n", .{});
-    
+
     var tcp_transport_client = try ghostnet.TcpTransport.init(allocator);
     defer tcp_transport_client.deinit();
 
     const server_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8080);
-    
+
     // Try to connect (will fail if no server, but demonstrates capability)
     const stream_result = tcp_transport_client.io.io().vtable.tcpConnect(tcp_transport_client.io.io().ptr, server_address);
-    
+
     const tcp_stream = stream_result catch |err| {
         std.debug.print("   ⚠️  Connection failed (expected if no server): {}\n", .{err});
         std.debug.print("   ✅ Client connection logic is working correctly\n", .{});
@@ -79,7 +79,7 @@ fn testClientCapability(allocator: std.mem.Allocator) !void {
     };
 
     std.debug.print("   ✅ TCP client connected successfully!\n", .{});
-    
+
     // Test stream capabilities
     const StreamType = @TypeOf(tcp_stream);
     std.debug.print("   ✅ read() method available: {}\n", .{@hasDecl(StreamType, "read")});
@@ -94,22 +94,22 @@ fn testClientCapability(allocator: std.mem.Allocator) !void {
 
 fn testMessageHandling() !void {
     std.debug.print("\n✅ Test 4: Message Handling Capabilities\n", .{});
-    
+
     // Demonstrate message preparation
     const test_message = "Hello ghostnet TCP!";
     var buffer: [1024]u8 = undefined;
-    
+
     std.debug.print("   ✅ Message preparation: \"{s}\"\n", .{test_message});
     std.debug.print("   ✅ Buffer allocation: {} bytes\n", .{buffer.len});
-    
+
     // Demonstrate echo logic
     const echo_response = try std.fmt.bufPrint(&buffer, "Echo: {s}", .{test_message});
     std.debug.print("   ✅ Echo response: \"{s}\"\n", .{echo_response});
-    
+
     // Demonstrate message parsing
     if (std.mem.startsWith(u8, echo_response, "Echo: ")) {
         std.debug.print("   ✅ Message parsing: Correctly identified echo response\n", .{});
     }
-    
+
     std.debug.print("   ✅ All message handling patterns implemented\n", .{});
 }

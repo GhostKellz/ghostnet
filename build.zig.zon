@@ -41,8 +41,8 @@
             .hash = "zcrypto-0.8.4-rgQAI6I0DQD3T7Vk5_S-EaUxMAhoXp7YvJtnzInpG7U1",
         },
         .zquic = .{
-            .url = "https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz",
-            .hash = "zquic-0.8.0-2rPdsz6KmRN6DaxicN_GS-x9Gaeg3qlFo6cKfa3s1KDO",
+            .url = "https://github.com/ghostkellz/zquic/archive/main.tar.gz",
+            .hash = "zquic-0.8.2-2rPdszxenBMHPfgmfwgDnBiL6MBy55i7NktMbEizfLeB",
         },
     },
     // Specifies the set of files and directories that are included in this package.

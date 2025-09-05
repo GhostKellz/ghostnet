@@ -1,3 +1,12 @@
+## ghostnet v0.4.3 - zsync v0.5.4 Integration & Zig 0.16 Compatibility
+
+### Changes:
+- Updated zsync dependency to v0.5.4 with improved network async stack
+- Full Zig 0.16 compatibility maintained
+- Enhanced async runtime performance with latest zsync optimizations
+
+---
+
 ● 🚀 ghostnet v0.2.3 - MEGA PERFORMANCE & SECURITY RELEASE!
 
   COMPLETE! ALL CRITICAL OPTIMIZATIONS IMPLEMENTED:

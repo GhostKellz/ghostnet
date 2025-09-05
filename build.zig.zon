@@ -37,12 +37,12 @@
             .hash = "zsync-0.5.4-KAuheV0SHQBxubuzXagj1oq5B2KE4VhMWTAAAaInwB2_",
         },
         .zcrypto = .{
-            .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
-            .hash = "zcrypto-0.8.5-rgQAI2o0DQD3Bf3KVSxTo_UZUUpPgpup0N6bUVTOAXj0",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
+            .hash = "zcrypto-0.8.6-rgQAI9g9DQDTxLJBz5QS6eF5rDIYloue7jV5YZysZCYl",
         },
         .zquic = .{
             .url = "https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz",
-            .hash = "zquic-0.8.3-2rPds65gnBO0IbvckELtry7GudIKNrNsb_NC11qV_Wg0",
+            .hash = "zquic-0.8.4-2rPds-J_nBOYqKUczwJyE-QvefJDrPoAdyCuo_-xpMnG",
         },
     },
     // Specifies the set of files and directories that are included in this package.

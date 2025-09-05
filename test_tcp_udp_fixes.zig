@@ -5,7 +5,7 @@ const ghostnet = @import("ghostnet");
 
 test "TCP setTcpNoDelay fix" {
     // Use new zsync BlockingIo interface
-    var blocking_io = zsync.BlockingIo.init(testing.allocator);
+    var blocking_io = zsync.BlockingIo.init(testing.allocator, 4096);
     defer blocking_io.deinit();
     const io = blocking_io.io();
 
@@ -21,7 +21,7 @@ test "TCP setTcpNoDelay fix" {
     };
 
     // This should not fail due to setTcpNoDelay method missing
-    const result = ghostnet.TcpConnection.connect(testing.allocator, io, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{ 127, 0, 0, 1 }, 80) }, tcp_options);
+    const result = ghostnet.TcpConnection.connect(testing.allocator, ghostnet.Address{ .ipv4 = std.net.Ip4Address.init([4]u8{ 127, 0, 0, 1 }, 80) }, tcp_options);
 
     // We expect connection to fail (since no server is listening), but not due to setTcpNoDelay
     // Just check that the method compiles and runs

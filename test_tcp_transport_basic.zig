@@ -11,12 +11,12 @@ test "TCP transport basic functionality" {
     const allocator = gpa.allocator();
 
     // Use new zsync BlockingIo interface
-    var blocking_io = zsync.BlockingIo.init(allocator);
+    var blocking_io = zsync.BlockingIo.init(allocator, 4096);
     defer blocking_io.deinit();
     const io = blocking_io.io();
 
     // Test transport creation
-    var tcp_transport = tcp.TcpTransport.init(allocator, io);
+    var tcp_transport = try tcp.TcpTransport.init(allocator);
     defer tcp_transport.deinit();
 
     const transport = tcp_transport.transport();
@@ -62,11 +62,11 @@ test "TCP transport error handling" {
     const allocator = gpa.allocator();
 
     // Use new zsync BlockingIo interface
-    var blocking_io = zsync.BlockingIo.init(allocator);
+    var blocking_io = zsync.BlockingIo.init(allocator, 4096);
     defer blocking_io.deinit();
     const io = blocking_io.io();
 
-    var tcp_transport = tcp.TcpTransport.init(allocator, io);
+    var tcp_transport = try tcp.TcpTransport.init(allocator);
     defer tcp_transport.deinit();
 
     const transport = tcp_transport.transport();

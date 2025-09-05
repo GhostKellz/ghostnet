@@ -10,7 +10,7 @@ pub const TcpTransport = struct {
     pub fn init(allocator: std.mem.Allocator) !TcpTransport {
         return .{
             .allocator = allocator,
-            .io = zsync.BlockingIo.init(allocator),
+            .io = zsync.BlockingIo.init(allocator, 4096),
         };
     }
 
@@ -70,21 +70,21 @@ pub const TcpTransport = struct {
 pub const TcpListener = struct {
     allocator: std.mem.Allocator,
     io: zsync.BlockingIo,
-    tcp_listener: ?zsync.TcpListener,
+    tcp_listener: ?std.net.Server,
     options: transport_mod.TransportOptions,
 
     pub fn init(allocator: std.mem.Allocator) !TcpListener {
         return .{
             .allocator = allocator,
-            .io = zsync.BlockingIo.init(allocator),
+            .io = zsync.BlockingIo.init(allocator, 4096),
             .tcp_listener = null,
             .options = undefined,
         };
     }
 
     pub fn deinit(self: *TcpListener) void {
-        if (self.tcp_listener) |tcp_listener| {
-            tcp_listener.close();
+        if (self.tcp_listener) |*tcp_listener| {
+            tcp_listener.deinit();
         }
         self.io.deinit();
     }
@@ -98,8 +98,8 @@ pub const TcpListener = struct {
             else => return error.InvalidAddress,
         };
 
-        // Use zsync TcpListener.bind() directly
-        self.tcp_listener = try zsync.TcpListener.bind(addr);
+        // Use std.net Server for listening
+        self.tcp_listener = try addr.listen(.{});
 
         // TODO: Apply socket options based on zsync API capabilities
         // For now, zsync TcpListener handles common options internally
@@ -127,8 +127,9 @@ pub const TcpListener = struct {
                     return error.InvalidAddress;
                 }
 
-                // Use zsync TcpListener.accept() to get a TcpStream
-                const tcp_stream = try ctx.listener.tcp_listener.?.accept();
+                // Use std.net Server.accept() to get a Stream
+                const connection = try ctx.listener.tcp_listener.?.accept();
+                const tcp_stream = connection.stream;
 
                 var tcp_conn = try ctx.listener.allocator.create(TcpConnection);
                 errdefer ctx.listener.allocator.destroy(tcp_conn);
@@ -142,8 +143,8 @@ pub const TcpListener = struct {
 
     fn close(ptr: *anyopaque) void {
         const self: *TcpListener = @ptrCast(@alignCast(ptr));
-        if (self.tcp_listener) |tcp_listener| {
-            tcp_listener.close();
+        if (self.tcp_listener) |*tcp_listener| {
+            tcp_listener.deinit();
             self.tcp_listener = null;
         }
     }
@@ -168,7 +169,7 @@ pub const TcpListener = struct {
 pub const TcpConnection = struct {
     allocator: std.mem.Allocator,
     io: zsync.BlockingIo,
-    tcp_stream: zsync.TcpStream,
+    tcp_stream: std.net.Stream,
     state: transport_mod.ConnectionState,
     options: transport_mod.TransportOptions,
 
@@ -182,12 +183,12 @@ pub const TcpConnection = struct {
         const conn = try allocator.create(TcpConnection);
         errdefer allocator.destroy(conn);
 
-        // Use zsync TcpStream.connect() directly
-        const tcp_stream = try zsync.TcpStream.connect(addr);
+        // Use std.net for TCP connection
+        const tcp_stream = try std.net.tcpConnectToAddress(addr);
 
         conn.* = .{
             .allocator = allocator,
-            .io = zsync.BlockingIo.init(allocator),
+            .io = zsync.BlockingIo.init(allocator, 4096),
             .tcp_stream = tcp_stream,
             .state = .connected,
             .options = options,

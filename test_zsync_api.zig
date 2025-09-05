@@ -9,7 +9,7 @@ test "zsync v0.3.2 API basic test" {
     const allocator = gpa.allocator();
 
     // Test the new zsync BlockingIo interface
-    var blocking_io = zsync.BlockingIo.init(allocator);
+    var blocking_io = zsync.BlockingIo.init(allocator, 4096);
     defer blocking_io.deinit();
 
     const io = blocking_io.io();

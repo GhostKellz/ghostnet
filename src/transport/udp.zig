@@ -11,7 +11,7 @@ pub const UdpPacket = struct {
 pub const UdpSocket = struct {
     allocator: std.mem.Allocator,
     io: zsync.BlockingIo,
-    udp_socket: ?zsync.UdpSocket,
+    udp_socket: ?std.posix.socket_t,
     state: transport.ConnectionState,
     options: transport.TransportOptions,
     local_addr: ?transport.Address = null,
@@ -19,7 +19,7 @@ pub const UdpSocket = struct {
     pub fn init(allocator: std.mem.Allocator) !UdpSocket {
         return .{
             .allocator = allocator,
-            .io = zsync.BlockingIo.init(allocator),
+            .io = zsync.BlockingIo.init(allocator, 4096),
             .udp_socket = null,
             .state = .closed,
             .options = undefined,
@@ -27,11 +27,7 @@ pub const UdpSocket = struct {
     }
 
     pub fn deinit(self: *UdpSocket) void {
-        if (self.udp_socket) |udp_socket| {
-            udp_socket.close(self.io.io()) catch |err| {
-                std.log.warn("Error closing UDP socket: {}", .{err});
-            };
-        }
+        self.close();
         self.io.deinit();
     }
 
@@ -44,8 +40,10 @@ pub const UdpSocket = struct {
             else => return error.InvalidAddress,
         };
 
-        // Use zsync UdpSocket.bind() directly
-        self.udp_socket = try zsync.UdpSocket.bind(addr);
+        // Use std.net for UDP socket binding
+        const socket = try std.posix.socket(addr.any.family, std.posix.SOCK.DGRAM, std.posix.IPPROTO.UDP);
+        try std.posix.bind(socket, &addr.any, addr.getOsSockLen());
+        self.udp_socket = socket;
         self.state = .connected;
         self.local_addr = address;
 
@@ -62,9 +60,8 @@ pub const UdpSocket = struct {
 
         if (self.udp_socket == null) return error.SocketNotBound;
 
-        // Use zsync UdpSocket connect method if available
-        // UDP "connect" sets default destination
-        try self.udp_socket.?.connect(addr);
+        // Use std.posix for UDP "connect" (sets default destination)
+        try std.posix.connect(self.udp_socket.?, &addr.any, addr.getOsSockLen());
         self.state = .connected;
     }
 
@@ -76,25 +73,29 @@ pub const UdpSocket = struct {
         };
 
         const socket = self.udp_socket orelse return error.SocketNotBound;
-        return socket.sendTo(data, addr) catch |err| {
+        return std.posix.sendto(socket, data, 0, &addr.any, addr.getOsSockLen()) catch |err| {
             return errors.mapSystemError(err);
         };
     }
 
     pub fn recvFrom(self: *UdpSocket, buffer: []u8) !UdpPacket {
         const socket = self.udp_socket orelse return error.SocketNotBound;
-        const result = socket.recvFrom(buffer) catch |err| {
+        var addr: std.posix.sockaddr = undefined;
+        var addr_len: std.posix.socklen_t = @sizeOf(@TypeOf(addr));
+        
+        const bytes_received = std.posix.recvfrom(socket, buffer, 0, &addr, &addr_len) catch |err| {
             return errors.mapSystemError(err);
         };
 
-        const address = switch (result.addr) {
-            .in => |a| transport.Address{ .ipv4 = a },
-            .in6 => |a| transport.Address{ .ipv6 = a },
+        const net_addr = std.net.Address.initPosix(@as(*align(4) const std.posix.sockaddr, @ptrCast(&addr)));
+        const address = switch (net_addr.any.family) {
+            std.posix.AF.INET => transport.Address{ .ipv4 = net_addr.in },
+            std.posix.AF.INET6 => transport.Address{ .ipv6 = net_addr.in6 },
             else => return error.InvalidAddress,
         };
 
         return UdpPacket{
-            .data = buffer[0..result.size],
+            .data = buffer[0..bytes_received],
             .address = address,
         };
     }
@@ -147,8 +148,8 @@ pub const UdpSocket = struct {
 
     pub fn close(self: *UdpSocket) void {
         self.state = .closed;
-        if (self.udp_socket) |udp_socket| {
-            udp_socket.close();
+        if (self.udp_socket) |socket| {
+            std.posix.close(socket);
             self.udp_socket = null;
         }
     }

@@ -218,9 +218,11 @@ pub fn build(b: *std.Build) void {
     // TCP zsync integration test
     const tcp_zsync_test = b.addExecutable(.{
         .name = "test_tcp_zsync_integration",
-        .root_source_file = b.path("test_tcp_zsync_integration.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test_tcp_zsync_integration.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     tcp_zsync_test.root_module.addImport("zsync", zsync_dep.module("zsync"));
     const run_tcp_zsync_test = b.addRunArtifact(tcp_zsync_test);

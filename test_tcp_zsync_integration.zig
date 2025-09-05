@@ -33,7 +33,7 @@ pub fn main() !void {
         // We can't test actual connection without a server, but we can test the structure
 
         // Test the socket creation part
-        var io = try zsync.ThreadPoolIo.init(allocator, .{});
+        var io = zsync.createBlockingIo(allocator);
         defer io.deinit();
 
         const socket = try io.socket(.ipv4, .tcp, .tcp);

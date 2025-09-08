@@ -101,8 +101,29 @@ pub const TcpListener = struct {
         // Use std.net Server for listening
         self.tcp_listener = try addr.listen(.{});
 
-        // TODO: Apply socket options based on zsync API capabilities
-        // For now, zsync TcpListener handles common options internally
+        // Apply socket options for performance
+        try self.applySocketOptions();
+    }
+
+    fn applySocketOptions(self: *TcpListener) !void {
+        // Set socket options for better performance
+        const sockfd = self.tcp_listener.stream.handle;
+        
+        // Enable socket reuse
+        const reuse: c_int = 1;
+        _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&reuse));
+        
+        // Set TCP_NODELAY to disable Nagle's algorithm for low latency
+        if (self.options.no_delay) {
+            const nodelay: c_int = 1;
+            _ = std.posix.setsockopt(sockfd, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay));
+        }
+        
+        // Set keep-alive if requested
+        if (self.options.keep_alive) {
+            const keepalive: c_int = 1;
+            _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.KEEPALIVE, std.mem.asBytes(&keepalive));
+        }
     }
 
     pub fn listener(self: *TcpListener) transport_mod.Listener {
@@ -342,9 +363,18 @@ pub const TcpConnection = struct {
 
     fn setTimeout(ptr: *anyopaque, timeout: u64) transport_mod.TransportError!void {
         const self: *TcpConnection = @ptrCast(@alignCast(ptr));
-        _ = self;
-        _ = timeout;
-        // TODO: Implement timeout setting with zsync
+        
+        // Set socket timeout for read/write operations
+        const timeout_ms = @as(u32, @intCast(@min(timeout, std.math.maxInt(u32))));
+        const tv = std.posix.timeval{
+            .tv_sec = @intCast(timeout_ms / 1000),
+            .tv_usec = @intCast((timeout_ms % 1000) * 1000),
+        };
+        
+        const sockfd = self.tcp_stream.handle;
+        _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&tv));
+        _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&tv));
+        
         return;
     }
 };

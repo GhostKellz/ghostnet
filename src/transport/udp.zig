@@ -47,8 +47,8 @@ pub const UdpSocket = struct {
         self.state = .connected;
         self.local_addr = address;
 
-        // TODO: Apply socket options based on zsync UdpSocket API capabilities
-        // For now, zsync UdpSocket handles common options internally
+        // Apply UDP socket options for better performance
+        try self.applySocketOptions();
     }
 
     pub fn connect(self: *UdpSocket, address: transport.Address) !void {
@@ -98,6 +98,23 @@ pub const UdpSocket = struct {
             .data = buffer[0..bytes_received],
             .address = address,
         };
+    }
+
+    fn applySocketOptions(self: *UdpSocket) !void {
+        if (self.udp_socket) |sockfd| {
+            // Enable socket reuse
+            const reuse: c_int = 1;
+            _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, std.mem.asBytes(&reuse));
+            
+            // Set buffer sizes for better performance
+            const buffer_size: c_int = 65536;
+            _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVBUF, std.mem.asBytes(&buffer_size));
+            _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.SNDBUF, std.mem.asBytes(&buffer_size));
+            
+            // Enable broadcast if needed
+            const broadcast: c_int = 1;
+            _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.BROADCAST, std.mem.asBytes(&broadcast));
+        }
     }
 
     pub fn sendToAsync(self: *UdpSocket, data: []const u8, address: transport.Address) zsync.Future(transport.TransportError!usize) {

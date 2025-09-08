@@ -10,6 +10,21 @@ const pool = @import("../transport/pool.zig");
 const quic = @import("quic.zig");
 const http2 = @import("http2.zig");
 
+/// Retry configuration for HTTP requests
+pub const RetryConfig = struct {
+    max_attempts: u8 = 3,
+    initial_backoff_ms: u64 = 100,
+    max_backoff_ms: u64 = 30000,
+    backoff_multiplier: f64 = 2.0,
+    jitter: bool = true,
+    retryable_status_codes: []const u16 = &[_]u16{429, 500, 502, 503, 504},
+    retryable_errors: []const errors.GhostnetError = &[_]errors.GhostnetError{
+        .NetworkTimeout,
+        .ConnectionReset,
+        .ConnectionRefused,
+    },
+};
+
 pub const HttpMethod = enum {
     GET,
     POST,
@@ -512,6 +527,7 @@ pub const HttpClient = struct {
     protocol_cache: ProtocolCache,
     rate_limiter: ?RateLimiter,
     retry_policy: RetryPolicy,
+    retry_config: RetryConfig,
     quic_client: quic.QuicClient,
     enable_compression: bool,
     max_redirects: u32,
@@ -533,6 +549,7 @@ pub const HttpClient = struct {
             .protocol_cache = ProtocolCache.init(allocator),
             .rate_limiter = null,
             .retry_policy = RetryPolicy{},
+            .retry_config = RetryConfig{},
             .quic_client = quic.QuicClient.init(allocator, runtime, quic.QuicConfig{}),
             .enable_compression = true,
             .max_redirects = 5,
@@ -706,6 +723,10 @@ pub const HttpClient = struct {
             .http_1_1 => .http_1_0,
             .http_1_0 => null,
         };
+    }
+
+    pub fn setRetryConfig(self: *HttpClient, config: RetryConfig) void {
+        self.retry_config = config;
     }
     
     pub fn get(self: *HttpClient, url: []const u8) !HttpResponse {
@@ -937,16 +958,64 @@ pub const HttpClient = struct {
     }
     
     pub fn sendRequest(self: *HttpClient, request: *HttpRequest, url: []const u8) !HttpResponse {
+        return self.sendRequestWithRetry(request, url);
+    }
+
+    fn sendRequestWithRetry(self: *HttpClient, request: *HttpRequest, url: []const u8) !HttpResponse {
         // Rate limiting check
         if (self.rate_limiter) |*limiter| {
             if (!limiter.allowRequest()) {
                 const wait_time = limiter.waitTime();
                 if (wait_time > 0) {
-                    std.time.sleep(wait_time * 1_000_000); // Convert to nanoseconds
+                    std.time.sleep(wait_time * 1_000_000);
                 }
             }
         }
+
+        var attempt: u8 = 0;
+        var last_error: ?anyerror = null;
+        var last_response: ?HttpResponse = null;
         
+        while (attempt < self.retry_config.max_attempts) {
+            // Calculate backoff delay for retry attempts
+            if (attempt > 0) {
+                const backoff_delay = self.calculateBackoffDelay(attempt);
+                zsync.sleep(backoff_delay * std.time.ns_per_ms) catch {};
+            }
+            
+            // Execute request
+            const result = self.executeRequest(request, url) catch |err| {
+                last_error = err;
+                
+                // Check if error is retryable
+                if (!self.isRetryableError(err)) {
+                    return err;
+                }
+                
+                attempt += 1;
+                continue;
+            };
+            
+            // Check if response status is retryable
+            if (self.isRetryableStatusCode(result.status_code)) {
+                last_response = result;
+                attempt += 1;
+                continue;
+            }
+            
+            // Success - return response
+            return result;
+        }
+        
+        // All retries exhausted
+        if (last_response) |response| {
+            return response;
+        }
+        
+        return last_error orelse error.MaxRetriesExceeded;
+    }
+
+    fn executeRequest(self: *HttpClient, request: *HttpRequest, url: []const u8) !HttpResponse {
         // Parse URL
         const uri = std.Uri.parse(url) catch return error.InvalidUrl;
         const host = uri.host orelse return error.MissingHost;
@@ -957,22 +1026,17 @@ pub const HttpClient = struct {
             .raw => |h| h,
         };
         var selected_protocol = self.selectProtocol(host_str);
-        var attempt: u32 = 0;
+        var protocol_attempt: u32 = 0;
         var last_error: ?anyerror = null;
         
-        while (attempt < self.retry_policy.max_attempts) {
+        while (protocol_attempt < 3) {
             const result = self.sendRequestWithProtocol(request, url, selected_protocol) catch |err| blk: {
                 last_error = err;
                 
                 // Try different protocol on failure
                 if (self.shouldRetryWithDifferentProtocol(err, selected_protocol)) |fallback_protocol| {
                     selected_protocol = fallback_protocol;
-                    attempt += 1;
-                    
-                    // Wait before retry
-                    const delay = self.retry_policy.getDelay(attempt);
-                    std.time.sleep(delay * 1_000_000);
-                    
+                    protocol_attempt += 1;
                     continue;
                 } else {
                     break :blk err;
@@ -980,14 +1044,65 @@ pub const HttpClient = struct {
             };
             
             // Cache successful protocol
-            self.protocol_cache.cacheProtocol(host, selected_protocol, true) catch {};
+            self.protocol_cache.cacheProtocol(host_str, selected_protocol, true) catch {};
             return result;
         }
         
         // Cache failed protocol
-        self.protocol_cache.cacheProtocol(host, selected_protocol, false) catch {};
+        self.protocol_cache.cacheProtocol(host_str, selected_protocol, false) catch {};
         
         return last_error orelse error.RequestFailed;
+    }
+
+    fn calculateBackoffDelay(self: *HttpClient, attempt: u8) u64 {
+        var delay = @as(f64, @floatFromInt(self.retry_config.initial_backoff_ms));
+        
+        // Exponential backoff
+        var i: u8 = 1;
+        while (i < attempt) : (i += 1) {
+            delay *= self.retry_config.backoff_multiplier;
+        }
+        
+        // Apply max backoff limit
+        delay = @min(delay, @as(f64, @floatFromInt(self.retry_config.max_backoff_ms)));
+        
+        // Add jitter if enabled
+        if (self.retry_config.jitter) {
+            var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+            const jitter = prng.random().float(f64) * 0.1; // ±10% jitter
+            delay += delay * (jitter - 0.05);
+        }
+        
+        return @intFromFloat(@max(delay, 0));
+    }
+
+    fn isRetryableError(self: *HttpClient, err: anyerror) bool {
+        for (self.retry_config.retryable_errors) |retryable_err| {
+            if (std.mem.eql(u8, @errorName(err), @tagName(retryable_err))) {
+                return true;
+            }
+        }
+        
+        // Common network errors that should be retried
+        return switch (err) {
+            error.ConnectionRefused,
+            error.ConnectionResetByPeer,
+            error.ConnectionTimedOut,
+            error.NetworkUnreachable,
+            error.TemporaryNameServerFailure,
+            error.NameServerFailure,
+            => true,
+            else => false,
+        };
+    }
+
+    fn isRetryableStatusCode(self: *HttpClient, status_code: u16) bool {
+        for (self.retry_config.retryable_status_codes) |code| {
+            if (code == status_code) {
+                return true;
+            }
+        }
+        return false;
     }
     
     fn sendRequestWithProtocol(self: *HttpClient, request: *HttpRequest, url: []const u8, protocol: HttpVersion) !HttpResponse {

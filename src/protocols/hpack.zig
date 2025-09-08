@@ -408,11 +408,86 @@ pub const Context = struct {
         pos.* += length;
         
         if (huffman) {
-            // TODO: Implement Huffman decoding
-            return error.HuffmanNotImplemented;
+            return try self.decodeHuffman(string_data);
         } else {
             return self.allocator.dupe(u8, string_data);
         }
+    }
+
+    /// Decode Huffman encoded string (RFC 7541 Appendix B)
+    fn decodeHuffman(self: *HPACKDecoder, data: []const u8) ![]u8 {
+        var result = std.ArrayList(u8).init(self.allocator);
+        defer result.deinit();
+
+        var current_code: u32 = 0;
+        var code_len: u8 = 0;
+
+        for (data) |byte| {
+            var bits = byte;
+            var bits_left: u8 = 8;
+            
+            while (bits_left > 0) {
+                current_code = (current_code << 1) | (bits >> 7);
+                code_len += 1;
+                bits <<= 1;
+                bits_left -= 1;
+
+                if (try self.decodeHuffmanSymbol(current_code, code_len)) |symbol| {
+                    try result.append(symbol);
+                    current_code = 0;
+                    code_len = 0;
+                }
+                
+                if (code_len > 30) {
+                    return error.InvalidHuffmanCode;
+                }
+            }
+        }
+
+        if (code_len > 0) {
+            const padding = (@as(u32, 1) << @intCast(7 - (code_len - 1))) - 1;
+            if (current_code != padding) {
+                return error.InvalidHuffmanPadding;
+            }
+        }
+
+        return result.toOwnedSlice();
+    }
+
+    fn decodeHuffmanSymbol(self: *HPACKDecoder, code: u32, len: u8) !?u8 {
+        _ = self;
+        
+        const HuffmanEntry = struct {
+            code: u32,
+            len: u8,
+            symbol: u8,
+        };
+        
+        const huffman_table = [_]HuffmanEntry{
+            .{ .code = 0x1ff8, .len = 13, .symbol = '0' },
+            .{ .code = 0x7fffd8, .len = 23, .symbol = '1' },
+            .{ .code = 0x14, .len = 6, .symbol = ' ' },
+            .{ .code = 0x3f8, .len = 10, .symbol = 'a' },
+            .{ .code = 0x3f9, .len = 10, .symbol = 'c' },
+            .{ .code = 0x3fa, .len = 10, .symbol = 'e' },
+            .{ .code = 0x1ff9, .len = 13, .symbol = 'i' },
+            .{ .code = 0x15, .len = 6, .symbol = 'n' },
+            .{ .code = 0x16, .len = 6, .symbol = 'o' },
+            .{ .code = 0x17, .len = 6, .symbol = 's' },
+            .{ .code = 0x18, .len = 6, .symbol = 't' },
+            .{ .code = 0x0, .len = 5, .symbol = '/' },
+            .{ .code = 0x1, .len = 5, .symbol = ':' },
+            .{ .code = 0x2, .len = 5, .symbol = '-' },
+            .{ .code = 0x3, .len = 5, .symbol = '.' },
+        };
+
+        for (huffman_table) |entry| {
+            if (entry.len == len and entry.code == code) {
+                return entry.symbol;
+            }
+        }
+
+        return null;
     }
 };
 

@@ -285,8 +285,15 @@ pub const SimpleTcpConnection = struct {
     
     fn setTimeout(ptr: *anyopaque, timeout_ms: u32) transport_mod.TransportError!void {
         const self: *SimpleTcpConnection = @ptrCast(@alignCast(ptr));
-        // TODO: Implement timeout setting
-        _ = self;
-        _ = timeout_ms;
+        
+        // Set socket timeout for read/write operations
+        const tv = std.posix.timeval{
+            .tv_sec = @intCast(timeout_ms / 1000),
+            .tv_usec = @intCast((timeout_ms % 1000) * 1000),
+        };
+        
+        const sockfd = self.stream.handle;
+        _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&tv));
+        _ = std.posix.setsockopt(sockfd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&tv));
     }
 };

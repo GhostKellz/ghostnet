@@ -11,6 +11,12 @@ pub const wireguard = @import("protocols/wireguard.zig");
 pub const websocket = @import("protocols/websocket.zig");
 pub const http = @import("protocols/http.zig");
 pub const http2 = @import("protocols/http2.zig");
+pub const grpc = @import("protocols/grpc.zig");
+pub const mqtt = @import("protocols/mqtt.zig");
+pub const nats = @import("protocols/nats.zig");
+pub const sse = @import("protocols/sse.zig");
+pub const compression = @import("protocols/compression.zig");
+pub const webtransport = @import("protocols/webtransport.zig");
 pub const middleware = @import("protocols/middleware.zig");
 pub const http_errors = @import("errors/http_errors.zig");
 pub const handshake = @import("crypto/handshake.zig");
@@ -71,6 +77,34 @@ pub const GitHubClient = http.GitHubClient;
 
 pub const Http2Client = http2.Http2Client;
 pub const Http2Connection = http2.Http2Connection;
+
+pub const GrpcClient = grpc.GrpcClient;
+pub const GrpcServer = grpc.GrpcServer;
+pub const GrpcResponse = grpc.GrpcResponse;
+pub const CallContext = grpc.CallContext;
+pub const StatusCode = grpc.StatusCode;
+pub const MethodType = grpc.MethodType;
+
+pub const MqttClient = mqtt.MqttClient;
+pub const MqttBroker = mqtt.MqttBroker;
+pub const MqttMessage = mqtt.Message;
+pub const QoS = mqtt.QoS;
+
+pub const NatsClient = nats.NatsClient;
+pub const NatsMessage = nats.Message;
+pub const NatsSubscription = nats.Subscription;
+
+pub const SseClient = sse.SseClient;
+pub const SseServer = sse.SseServer;
+pub const SseEvent = sse.Event;
+
+pub const Compressor = compression.Compressor;
+pub const CompressionAlgorithm = compression.Algorithm;
+pub const CompressionLevel = compression.Level;
+
+pub const WebTransportSession = webtransport.WebTransportSession;
+pub const WebTransportServer = webtransport.WebTransportServer;
+pub const WebTransportStream = webtransport.WebTransportStream;
 pub const MiddlewareChain = middleware.MiddlewareChain;
 pub const Middleware = middleware.Middleware;
 pub const RetryConfig = middleware.RetryConfig;

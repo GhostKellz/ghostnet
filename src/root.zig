@@ -5,6 +5,8 @@ pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
 pub const pool = @import("transport/pool.zig");
 pub const errors = @import("errors/errors.zig");
+pub const logging = @import("logging.zig");
+pub const validation = @import("validation.zig");
 pub const protocols = @import("protocols/protocol.zig");
 pub const quic = @import("protocols/quic.zig");
 pub const wireguard = @import("protocols/wireguard.zig");
@@ -63,6 +65,15 @@ pub const Peer = wireguard.Peer;
 pub const GhostnetError = errors.GhostnetError;
 pub const ErrorContext = errors.ErrorContext;
 pub const Result = errors.Result;
+
+pub const Logger = logging.Logger;
+pub const LogLevel = logging.LogLevel;
+pub const LogContext = logging.LogContext;
+pub const PerformanceTimer = logging.PerformanceTimer;
+
+pub const Validator = validation.Validator;
+pub const ValidationError = validation.ValidationError;
+pub const ValidationConfig = validation.ValidationConfig;
 
 pub const HttpClient = http.HttpClient;
 pub const HttpResponse = http.HttpResponse;

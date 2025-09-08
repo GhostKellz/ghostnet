@@ -215,6 +215,39 @@ pub fn build(b: *std.Build) void {
 
     const run_zsync_api_test = b.addRunArtifact(zsync_api_test);
 
+    // Production test suite
+    const prod_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_suite.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+                .{ .name = "zsync", .module = zsync_dep.module("zsync") },
+                .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
+                .{ .name = "zquic", .module = zquic_dep.module("zquic") },
+            },
+        }),
+    });
+
+    const run_prod_tests = b.addRunArtifact(prod_tests);
+
+    // Simple production validation test
+    const simple_prod_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test_production.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ghostnet", .module = mod },
+            },
+        }),
+    });
+
+    const run_simple_prod_test = b.addRunArtifact(simple_prod_test);
+    const simple_prod_test_step = b.step("test-prod-simple", "Run simple production validation tests");
+    simple_prod_test_step.dependOn(&run_simple_prod_test.step);
+
     // TCP zsync integration test
     const tcp_zsync_test = b.addExecutable(.{
         .name = "test_tcp_zsync_integration",
@@ -323,6 +356,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_prod_tests.step);
     test_step.dependOn(&run_zquic_test.step);
     test_step.dependOn(&run_tcp_udp_test.step);
     test_step.dependOn(&run_tcp_transport_test.step);

@@ -219,7 +219,7 @@ pub const GrpcClient = struct {
                 };
             }
             
-            fn extractGrpcStatus(self: @This(), headers: std.StringHashMap([]const u8)) !StatusCode {
+            fn extractGrpcStatus(args: @This(), headers: std.StringHashMap([]const u8)) !StatusCode {
                 if (headers.get("grpc-status")) |status_str| {
                     const status_int = try std.fmt.parseInt(u32, status_str, 10);
                     return @enumFromInt(status_int);
@@ -227,8 +227,8 @@ pub const GrpcClient = struct {
                 return .OK;
             }
             
-            fn extractGrpcMetadata(self: @This(), headers: std.StringHashMap([]const u8)) !Metadata {
-                var metadata = Metadata.init(self.client.allocator);
+            fn extractGrpcMetadata(args: @This(), headers: std.StringHashMap([]const u8)) !Metadata {
+                var metadata = Metadata.init(args.client.allocator);
                 
                 var it = headers.iterator();
                 while (it.next()) |entry| {
@@ -429,7 +429,7 @@ pub const GrpcServer = struct {
     services: std.StringHashMap(*ServiceDescriptor),
     
     pub fn init(allocator: std.mem.Allocator, runtime: *zsync.Runtime) !*GrpcServer {
-        var server = try allocator.create(GrpcServer);
+        const server = try allocator.create(GrpcServer);
         server.* = .{
             .allocator = allocator,
             .http2_server = try http2.Http2Server.init(allocator, runtime),
@@ -540,18 +540,160 @@ pub const GrpcServer = struct {
     }
     
     fn handleClientStreamingMethod(self: *GrpcServer, connection: http2.Http2Connection, request: http2.Http2Request, method: *MethodDescriptor) !void {
-        // TODO: Implement client streaming
-        try self.sendError(connection, request.stream_id, .UNIMPLEMENTED);
+        var messages = std.ArrayList([]u8).init(self.allocator);
+        defer {
+            for (messages.items) |msg| {
+                self.allocator.free(msg);
+            }
+            messages.deinit();
+        }
+        
+        // Collect all client messages
+        while (true) {
+            const data = connection.receiveData(request.stream_id) catch |err| switch (err) {
+                error.StreamClosed => break,
+                else => return err,
+            };
+            
+            if (data.len == 0) break;
+            
+            const frame = try MessageFrame.decode(data, self.allocator);
+            try messages.append(try self.allocator.dupe(u8, frame.data));
+            self.allocator.free(frame.data);
+        }
+        
+        // Process all messages and generate response
+        var combined_data = std.ArrayList(u8).init(self.allocator);
+        defer combined_data.deinit();
+        
+        for (messages.items) |msg| {
+            try combined_data.appendSlice(msg);
+        }
+        
+        const response_data = try method.handler(combined_data.items);
+        defer self.allocator.free(response_data);
+        
+        // Send single response
+        const response_frame = MessageFrame{
+            .compressed = false,
+            .length = @intCast(response_data.len),
+            .data = response_data,
+        };
+        
+        const encoded_response = try response_frame.encode(self.allocator);
+        defer self.allocator.free(encoded_response);
+        
+        try connection.sendResponse(request.stream_id, .{
+            .status_code = 200,
+            .headers = std.StringHashMap([]const u8).init(self.allocator),
+            .body = encoded_response,
+        });
+        
+        // Send trailers
+        var trailers = std.StringHashMap([]const u8).init(self.allocator);
+        defer trailers.deinit();
+        try trailers.put("grpc-status", "0");
+        try connection.sendTrailers(request.stream_id, trailers);
     }
     
     fn handleServerStreamingMethod(self: *GrpcServer, connection: http2.Http2Connection, request: http2.Http2Request, method: *MethodDescriptor) !void {
-        // TODO: Implement server streaming  
-        try self.sendError(connection, request.stream_id, .UNIMPLEMENTED);
+        // Decode initial request
+        const frame = try MessageFrame.decode(request.body, self.allocator);
+        defer self.allocator.free(frame.data);
+        
+        // Get response data from handler (expecting multiple responses)
+        const response_data = try method.handler(frame.data);
+        defer self.allocator.free(response_data);
+        
+        // Split response into multiple messages (simple implementation)
+        // In production, this would be handled by the service implementation
+        const chunk_size = 1024;
+        var offset: usize = 0;
+        
+        while (offset < response_data.len) {
+            const chunk_end = @min(offset + chunk_size, response_data.len);
+            const chunk = response_data[offset..chunk_end];
+            
+            const response_frame = MessageFrame{
+                .compressed = false,
+                .length = @intCast(chunk.len),
+                .data = chunk,
+            };
+            
+            const encoded_chunk = try response_frame.encode(self.allocator);
+            defer self.allocator.free(encoded_chunk);
+            
+            const is_last = chunk_end == response_data.len;
+            try connection.sendData(request.stream_id, encoded_chunk, is_last);
+            
+            offset = chunk_end;
+        }
+        
+        // Send trailers
+        var trailers = std.StringHashMap([]const u8).init(self.allocator);
+        defer trailers.deinit();
+        try trailers.put("grpc-status", "0");
+        try connection.sendTrailers(request.stream_id, trailers);
     }
     
     fn handleBidirectionalStreamingMethod(self: *GrpcServer, connection: http2.Http2Connection, request: http2.Http2Request, method: *MethodDescriptor) !void {
-        // TODO: Implement bidirectional streaming
-        try self.sendError(connection, request.stream_id, .UNIMPLEMENTED);
+        // Spawn coroutine to handle bidirectional communication
+        const handler_context = struct {
+            server: *GrpcServer,
+            connection: http2.Http2Connection,
+            stream_id: u32,
+            method: *MethodDescriptor,
+            
+            pub fn run(ctx: @This()) void {
+                ctx.handleBidirectionalStream() catch |err| {
+                    ctx.server.sendError(ctx.connection, ctx.stream_id, .INTERNAL) catch {};
+                    std.log.err("Bidirectional streaming error: {}", .{err});
+                };
+            }
+            
+            fn handleBidirectionalStream(ctx: @This()) !void {
+                while (true) {
+                    const data = ctx.connection.receiveData(ctx.stream_id) catch |err| switch (err) {
+                        error.StreamClosed => break,
+                        else => return err,
+                    };
+                    
+                    if (data.len == 0) break;
+                    
+                    const frame = try MessageFrame.decode(data, ctx.server.allocator);
+                    defer ctx.server.allocator.free(frame.data);
+                    
+                    // Process message and generate response
+                    const response_data = try ctx.method.handler(frame.data);
+                    defer ctx.server.allocator.free(response_data);
+                    
+                    // Send response back
+                    const response_frame = MessageFrame{
+                        .compressed = false,
+                        .length = @intCast(response_data.len),
+                        .data = response_data,
+                    };
+                    
+                    const encoded_response = try response_frame.encode(ctx.server.allocator);
+                    defer ctx.server.allocator.free(encoded_response);
+                    
+                    try ctx.connection.sendData(ctx.stream_id, encoded_response, false);
+                }
+                
+                // Send final trailers
+                var trailers = std.StringHashMap([]const u8).init(ctx.server.allocator);
+                defer trailers.deinit();
+                try trailers.put("grpc-status", "0");
+                try ctx.connection.sendTrailers(ctx.stream_id, trailers);
+            }
+        }{
+            .server = self,
+            .connection = connection,
+            .stream_id = request.stream_id,
+            .method = method,
+        };
+        
+        _ = zsync.spawn(handler_context.run, .{handler_context});
     }
     
     fn sendError(self: *GrpcServer, connection: http2.Http2Connection, stream_id: u32, status: StatusCode) !void {
@@ -578,7 +720,7 @@ pub const ServiceDescriptor = struct {
     allocator: std.mem.Allocator,
     
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !*ServiceDescriptor {
-        var service = try allocator.create(ServiceDescriptor);
+        const service = try allocator.create(ServiceDescriptor);
         service.* = .{
             .name = try allocator.dupe(u8, name),
             .methods = std.StringHashMap(*MethodDescriptor).init(allocator),
@@ -621,7 +763,7 @@ pub const MethodDescriptor = struct {
         method_type: MethodType, 
         handler: *const fn ([]const u8) anyerror![]u8
     ) !*MethodDescriptor {
-        var method = try allocator.create(MethodDescriptor);
+        const method = try allocator.create(MethodDescriptor);
         method.* = .{
             .name = try allocator.dupe(u8, name),
             .method_type = method_type,

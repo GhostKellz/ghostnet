@@ -3,6 +3,7 @@ const zsync = @import("zsync");
 const transport = @import("../transport/transport.zig");
 const http = @import("http.zig");
 const errors = @import("../errors/errors.zig");
+const logging = @import("../logging.zig");
 
 // HPACK Implementation for HTTP/2 header compression
 const hpack = @import("hpack.zig");
@@ -473,7 +474,7 @@ pub const Http2Connection = struct {
             .window_update => try self.processWindowUpdate(frame),
             else => {
                 // Unknown frame type, ignore
-                std.debug.print("Ignoring unknown frame type: {}\n", .{frame.frame_type});
+                logging.warn(.{ .component = "http2", .operation = "parseFrame" }, "Ignoring unknown frame type: {}", .{frame.frame_type});
             },
         }
     }
@@ -489,7 +490,7 @@ pub const Http2Connection = struct {
         }
         
         // Simplified header processing (would normally use HPACK)
-        std.debug.print("Received headers for stream {d}: {s}\n", .{ stream_id, frame.payload });
+        logging.debug(.{ .component = "http2", .operation = "handleHeaders", .stream_id = stream_id }, "Received headers: {s}", .{frame.payload});
         
         if (frame.flags.end_stream) {
             stream.?.state = .half_closed_remote;
@@ -519,7 +520,7 @@ pub const Http2Connection = struct {
         }
         
         // Process settings (simplified)
-        std.debug.print("Received settings frame with {d} bytes\n", .{frame.payload.len});
+        logging.debug(.{ .component = "http2", .operation = "handleSettings" }, "Received settings frame with {d} bytes", .{frame.payload.len});
         
         // Send settings ACK
         const ack_frame = Frame{
@@ -557,7 +558,7 @@ pub const Http2Connection = struct {
     fn processGoAway(self: *Http2Connection, frame: Frame) !void {
         _ = frame;
         self.state = .closing;
-        std.debug.print("Received GOAWAY frame, closing connection\n", .{});
+        logging.info(.{ .component = "http2", .operation = "handleGoAway" }, "Received GOAWAY frame, closing connection");
     }
     
     fn processWindowUpdate(self: *Http2Connection, frame: Frame) !void {

@@ -1,6 +1,7 @@
 const std = @import("std");
 const http = @import("http.zig");
 const zsync = @import("zsync");
+const logging = @import("../logging.zig");
 
 pub const MiddlewareError = error{
     MiddlewareRejected,
@@ -100,14 +101,14 @@ pub const MiddlewareChain = struct {
 // Built-in middleware implementations
 pub const LoggingMiddleware = struct {
     pub fn beforeRequest(ctx: *MiddlewareContext) MiddlewareResult {
-        std.debug.print("[HTTP] {s} {s}\n", .{ ctx.request.method.toString(), ctx.url });
+        logging.info(.{ .component = "http-middleware", .operation = "request", .request_id = ctx.url }, "{s} {s}", .{ ctx.request.method.toString(), ctx.url });
         return .continue_chain;
     }
     
     pub fn afterResponse(ctx: *MiddlewareContext) MiddlewareResult {
         if (ctx.response) |response| {
             const duration = std.time.milliTimestamp() - ctx.start_time;
-            std.debug.print("[HTTP] {d} - {dms}\n", .{ response.status_code, duration });
+            logging.info(.{ .component = "http-middleware", .operation = "response", .request_id = ctx.url }, "Status {d} - {d}ms", .{ response.status_code, duration });
         }
         return .continue_chain;
     }
@@ -159,7 +160,7 @@ pub const RetryMiddleware = struct {
             
             if (should_retry) {
                 const delay_ms = self.calculateDelay(ctx.attempt);
-                std.debug.print("[RETRY] Attempt {d}/{d} after {dms}\n", .{ ctx.attempt + 1, self.config.max_attempts, delay_ms });
+                logging.warn(.{ .component = "http-middleware", .operation = "retry" }, "Attempt {d}/{d} after {d}ms", .{ ctx.attempt + 1, self.config.max_attempts, delay_ms });
                 
                 // Sleep for calculated delay
                 std.time.sleep(delay_ms * std.time.ns_per_ms);

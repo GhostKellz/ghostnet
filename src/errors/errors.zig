@@ -131,7 +131,8 @@ pub fn Result(comptime T: type) type {
             return switch (self) {
                 .ok => |val| val,
                 .err => |ctx| {
-                    std.debug.panic("Called unwrap on error result: {}", .{ctx});
+                    std.log.err("Called unwrap on error result: {}", .{ctx});
+                    @panic("Unwrap called on error result");
                 },
             };
         }

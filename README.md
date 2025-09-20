@@ -1,6 +1,10 @@
+<div align="center">
+  <img src="assets/icons/ghostnet.png" alt="ghostnet logo" width="200">
+</div>
+
 # 👻 ghostnet
 
-[![Platform: Zig v0.15+](https://img.shields.io/badge/zig-v0.15%2B-f7a41d?logo=zig\&logoColor=white)](https://ziglang.org/)
+[![Platform: Zig v0.16+](https://img.shields.io/badge/zig-v0.16%2B-f7a41d?logo=zig\&logoColor=white)](https://ziglang.org/)
 [![Async by zsync](https://img.shields.io/badge/async-zsync%20runtime-blue?logo=zig\&logoColor=white)](https://github.com/ghostkellz/zsync)
 [![Next-Gen Networking](https://img.shields.io/badge/next--gen-networking-informational)]()
 [![QUIC-Ready](https://img.shields.io/badge/transport-QUIC-green?logo=quic)]()

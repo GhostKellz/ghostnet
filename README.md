@@ -11,6 +11,14 @@
 [![WireGuard-Ready](https://img.shields.io/badge/vpn-wireguard-critical)]()
 [![Crypto-Native](https://img.shields.io/badge/crypto-zcrypto-important?logo=keybase)]()
 
+## DISCLAIMER
+
+⚠️ **EXPERIMENTAL LIBRARY - FOR LAB/PERSONAL USE** ⚠️
+
+This is an experimental library under active development. It is
+intended for research, learning, and personal projects. The API is subject
+to change!
+
 ---
 
 > **ghostnet** is the async-native, next-gen networking framework for Zig.
